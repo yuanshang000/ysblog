@@ -63,39 +63,20 @@ jobs:
             npx wrangler r2 bucket create myblog-media
           fi
 
-      # D1 必须先创建才能拿到 database_id。脚本幂等：已存在则复用。
+      # D1 必须先创建才能拿到 database_id。
+      # 用独立脚本而非内联 JSON 解析 —— wrangler 各版本 d1 list --json 的字段名不一致，
+      # 且脚本可本地实测（见 scripts/ensure-d1.sh 头部注释）。
       - name: 确认 D1 数据库存在
         id: d1
         run: |
-          set -e
-          EXISTING=$(npx wrangler d1 list --json 2>/dev/null | node -e "
-            let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
-              try {
-                const list = JSON.parse(s);
-                const hit = list.find(d => d.name === 'myblog');
-                console.log(hit ? hit.uuid : '');
-              } catch { console.log(''); }
-            });
-          ")
-          if [ -n "$EXISTING" ]; then
-            echo "D1 库 myblog 已存在：$EXISTING"
-            echo "database_id=$EXISTING" >> "$GITHUB_OUTPUT"
-          else
-            echo "创建 D1 库 myblog…"
-            npx wrangler d1 create myblog
-            NEW_ID=$(npx wrangler d1 list --json 2>/dev/null | node -e "
-              let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
-                const list = JSON.parse(s);
-                const hit = list.find(d => d.name === 'myblog');
-                console.log(hit ? hit.uuid : '');
-              });
-            ")
-            if [ -z "$NEW_ID" ]; then
-              echo "::error::创建 D1 失败，未能获取 database_id"
-              exit 1
-            fi
-            echo "database_id=$NEW_ID" >> "$GITHUB_OUTPUT"
+          chmod +x scripts/ensure-d1.sh
+          ID=$(./scripts/ensure-d1.sh myblog)
+          if [ -z "$ID" ]; then
+            echo "::error::未能获取 D1 database_id，部署中止"
+            exit 1
           fi
+          echo "database_id=$ID" >> "$GITHUB_OUTPUT"
+          echo "已确认 database_id=$ID"
 
       # 把真实 database_id 写回配置文件（替换占位符）
       - name: 回填 database_id
@@ -107,6 +88,15 @@ jobs:
           fi
           echo "使用 database_id=$ID"
           sed -i "s/REPLACE_WITH_YOUR_D1_ID/$ID/g" wrangler.jsonc
+
+          # 校验默认环境的占位符已替换。
+          # 注意：staging 的 REPLACE_WITH_STAGING_D1_ID 不阻塞本次部署
+          #（deploy 只读默认环境），它由staging 的独立工作流或手动部署处理。
+          if grep -q "REPLACE_WITH_YOUR_D1_ID" wrangler.jsonc; then
+            echo "::error::默认环境的 database_id 回填失败，占位符仍存在"
+            exit 1
+          fi
+          echo "✓ database_id 已回填"
           grep -n "database_id" wrangler.jsonc | head -2
 
       # 迁移放在部署之前：
