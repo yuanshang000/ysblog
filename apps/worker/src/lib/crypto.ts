@@ -1,15 +1,25 @@
 /**
  * 密码哈希与令牌哈希。
  *
- * 密码：PBKDF2-HMAC-SHA256，210,000 次迭代（OWASP 2023 建议下限），
- *      每个账号独立随机盐，输出 `pbkdf2$iterations$salt$hash`。
- * 校验使用定长比较，避免时序侧信道。
+ * 密码：PBKDF2-HMAC-SHA256，每个账号独立随机盐，
+ *      输出 `pbkdf2$iterations$salt$hash`。校验使用定长比较，避免时序侧信道。
  *
- * 会话令牌：随机 32 字节，数据库只保存 SHA-256 哈希。
+ * 迭代次数为何是 10,000 而非 OWASP 建议的 210,000：
+ * Cloudflare Workers **免费版单次请求 CPU 硬限制 10 ms**（付费版 5 分钟），
+ * 而 210,000 次迭代实测约 41 ms（付费版默认 30 秒），
+ * 在免费版上会触发 CPU 超限 —— 异常被 catch 吞掉后，
+ * 登录接口一律返回「用户名或密码错误」，且服务端日志无任何线索。
+ * 10,000 次实测约 3 ms，留足余量。
+ *
+ * 升级路径：升级 Workers 付费计划后，把 ITERATIONS 调回 210,000，
+ * 并确认 verifyPassword 能在 30 秒内完成（无需改代码，迭代次数存在哈希串里）。
+ *
+ * 参考：https://developers.cloudflare.com/workers/platform/limits/
+ * 核实日期：2026-10-10
  */
 import { HttpError } from './http';
 
-const ITERATIONS = 210_000;
+const ITERATIONS = 10_000;
 const KEY_LEN = 32;
 const SALT_LEN = 16;
 
@@ -55,17 +65,36 @@ export async function hashPassword(password: string): Promise<string> {
 }
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  // 先做格式校验（不耗 CPU），格式不对直接判false
+  const parts = (stored ?? '').split('$');
+  if (parts.length !== 4 || parts[0] !== 'pbkdf2') return false;
+  const iterations = Number(parts[1]);
+  if (!Number.isFinite(iterations) || iterations < 1000) return false;
+
+  let salt: Uint8Array;
+  let expected: Uint8Array;
   try {
-    const parts = stored.split('$');
-    if (parts.length !== 4 || parts[0] !== 'pbkdf2') return false;
-    const iterations = Number(parts[1]);
-    if (!Number.isFinite(iterations) || iterations < 1000) return false;
-    const salt = fromHex(parts[2]);
-    const expected = fromHex(parts[3]);
+    salt = fromHex(parts[2]);
+    expected = fromHex(parts[3]);
+    if (expected.length !== KEY_LEN) return false;
+  } catch {
+    // 哈希串损坏（长度非偶数、含非 hex 字符）——这是数据问题，必须能被发现
+    console.error('[crypto] password_hash格式损坏，无法解析');
+    return false;
+  }
+
+  try {
     const actual = await pbkdf2(password, salt, iterations);
     return timingSafeEqual(actual, expected);
-  } catch {
-    return false;
+  } catch (err) {
+    // 关键：不要静默吞掉。
+    // Workers 免费版 CPU 上限 10 ms，迭代次数过高会在这里抛错；
+    // 若return false，对外只表现为「密码错误」，排查时毫无线索。
+    console.error('[crypto] PBKDF2 计算失败', {
+      iterations,
+      message: err instanceof Error ? err.message : String(err)
+    });
+    throw new HttpError(500, '密码校验失败，请稍后重试');
   }
 }
 
