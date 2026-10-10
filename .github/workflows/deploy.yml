@@ -1,10 +1,11 @@
 name: 部署到 Cloudflare
 
-# 触发条件：推送到 main 分支时自动部署
+# 推送到默认分支时自动部署。
+# GitHub 新仓库默认分支可能是 master 或 main，两者都监听，避免因分支名不匹配而不触发。
 on:
   push:
-    branches: [main]
-  # 手动触发
+    branches: [main, master]
+  # 手动触发（Actions 页面右上角 Run workflow）
   workflow_dispatch:
 
 concurrency:
@@ -16,6 +17,9 @@ jobs:
   deploy:
     name: 构建并部署
     runs-on: ubuntu-latest
+    # 只有手动触发时需要显式授权（自动推送已在仓库内授权）
+    permissions:
+      contents: read
 
     steps:
       - name: 检出代码
@@ -36,27 +40,86 @@ jobs:
         run: npm run typecheck
 
       - name: 单元测试
-        run: npm test -- --run
+        run: npx vitest run
 
       # 构建前台 + 后台，并校验产物完整性
       - name: 构建前端资源
         run: npm run build:ci
 
-      - name: 拉取 Cloudflare 部署凭据
+      - name: 拉取 Cloudflare 凭据
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      # 迁移放在构建之后、部署之前：
-      # 迁移失败则不部署，避免代码与数据库结构不匹配
+      # ---- 基础设施准备（幂等：已存在则跳过）----
+      # R2 桶不存在才创建。已存在时 wrangler 会报错，用 || true 兜底。
+      - name: 确认 R2 存储桶存在
+        run: |
+          if npx wrangler r2 bucket list 2>/dev/null | grep -q "myblog-media"; then
+            echo "R2桶 myblog-media 已存在，跳过创建"
+          else
+            echo "创建 R2 桶 myblog-media…"
+            npx wrangler r2 bucket create myblog-media
+          fi
+
+      # D1 必须先创建才能拿到 database_id。脚本幂等：已存在则复用。
+      - name: 确认 D1 数据库存在
+        id: d1
+        run: |
+          set -e
+          EXISTING=$(npx wrangler d1 list --json 2>/dev/null | node -e "
+            let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+              try {
+                const list = JSON.parse(s);
+                const hit = list.find(d => d.name === 'myblog');
+                console.log(hit ? hit.uuid : '');
+              } catch { console.log(''); }
+            });
+          ")
+          if [ -n "$EXISTING" ]; then
+            echo "D1 库 myblog 已存在：$EXISTING"
+            echo "database_id=$EXISTING" >> "$GITHUB_OUTPUT"
+          else
+            echo "创建 D1 库 myblog…"
+            npx wrangler d1 create myblog
+            NEW_ID=$(npx wrangler d1 list --json 2>/dev/null | node -e "
+              let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+                const list = JSON.parse(s);
+                const hit = list.find(d => d.name === 'myblog');
+                console.log(hit ? hit.uuid : '');
+              });
+            ")
+            if [ -z "$NEW_ID" ]; then
+              echo "::error::创建 D1 失败，未能获取 database_id"
+              exit 1
+            fi
+            echo "database_id=$NEW_ID" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 把真实 database_id 写回配置文件（替换占位符）
+      - name: 回填 database_id
+        run: |
+          ID="${{ steps.d1.outputs.database_id }}"
+          if [ -z "$ID" ]; then
+            echo "::error::未能获取 database_id，无法继续部署"
+            exit 1
+          fi
+          echo "使用 database_id=$ID"
+          sed -i "s/REPLACE_WITH_YOUR_D1_ID/$ID/g" wrangler.jsonc
+          grep -n "database_id" wrangler.jsonc | head -2
+
+      # 迁移放在部署之前：
+      # 迁移失败则不部署，避免代码已上线但表结构不匹配导致运行时 500
       - name: 执行数据库迁移
         run: npx wrangler d1 migrations apply myblog --remote
 
       - name: 部署
         run: npx wrangler deploy
-        env:
-          ENVIRONMENT: production
 
       - name: 输出访问地址
-        run: echo "部署完成，访问 Cloudflare 控制台查看域名"
+        run: |
+          echo "::notice::部署完成。访问 Cloudflare 控制台 → Workers → myblog 查看域名"
+          echo "::notice::首次部署后请立即设置密钥："
+          echo "::notice::  npx wrangler secret put SESSION_SECRET"
+          echo "::notice::  npx wrangler secret put IP_HASH_SALT"
