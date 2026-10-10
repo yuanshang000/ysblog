@@ -1,0 +1,21 @@
+{
+  "name": "@myblog/worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply myblog --local",
+    "db:migrate:remote": "wrangler d1 migrations apply myblog --remote"
+  },
+  "dependencies": {
+    "@myblog/shared": "*",
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241218.0",
+    "wrangler": "^3.99.0"
+  }
+}

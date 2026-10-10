@@ -1,0 +1,46 @@
+{
+  "name": "my-blog",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MyBlog 个人博客系统 — Vue 3 SSR 前台 + Vue 3 后台 + Cloudflare Workers API + D1 + R2",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n worker,web,admin -c cyan,green,magenta \"npm:dev:worker\" \"npm:dev:web\" \"npm:dev:admin\"",
+    "dev:worker": "npm -w @myblog/worker run dev",
+    "dev:web": "npm -w @myblog/web run dev",
+    "dev:admin": "npm -w @myblog/admin run dev",
+    "clean": "node -e \"const fs=require('fs');for(const d of ['apps/worker/public/islands','apps/worker/public/admin'])fs.rmSync(d,{recursive:true,force:true})\"",
+    "build": "npm run clean && npm run build:web && npm run build:admin",
+    "build:web": "npm -w @myblog/web run build",
+    "build:admin": "npm -w @myblog/admin run build",
+    "typecheck": "npm -w @myblog/worker exec tsc --noEmit && npm -w @myblog/admin exec vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate:local": "npm -w @myblog/worker run db:migrate:local",
+    "db:migrate:remote": "npm -w @myblog/worker run db:migrate:remote",
+    "db:backup": "node scripts/backup.mjs",
+    "setup:admin": "node --experimental-strip-types scripts/setup-admin.ts",
+    "deploy": "npm run build && npm -w @myblog/worker run deploy"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^22.10.2",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "happy-dom": "^15.11.7",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8",
+    "vue-tsc": "^2.2.0",
+    "wrangler": "^3.99.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
