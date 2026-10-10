@@ -22,7 +22,7 @@
     {
       "binding": "DB",
       "database_name": "myblog",
-      "database_id": "REPLACE_WITH_YOUR_D1_ID",
+      "database_id": "cffa7e05-2345-4fe3-8faf-55486e5ec6ca",
       "migrations_dir": "migrations"
     }
   ],
@@ -45,7 +45,7 @@
 
   "vars": {
     "ENVIRONMENT": "production",
-    "SITE_URL": "",
+    "SITE_URL": "https://myblog.yuanshang000.workers.dev",
     "ALLOWED_ORIGINS": "",
     "MAX_UPLOAD_MB": "10",
     "ALLOW_SVG": "false"
