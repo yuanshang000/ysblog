@@ -16,6 +16,8 @@
     "build": "npm run clean && npm run build:web && npm run build:admin",
     "build:web": "npm -w @myblog/web run build",
     "build:admin": "npm -w @myblog/admin run build",
+    "build:ci": "npm run clean && npm run build:web && npm run build:admin && npm run verify:assets",
+    "verify:assets": "node scripts/verify-build-assets.mjs",
     "typecheck": "npm -w @myblog/worker exec tsc --noEmit && npm -w @myblog/admin exec vue-tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -23,7 +25,11 @@
     "db:migrate:remote": "npm -w @myblog/worker run db:migrate:remote",
     "db:backup": "node scripts/backup.mjs",
     "setup:admin": "node --experimental-strip-types scripts/setup-admin.ts",
-    "deploy": "npm run build && npm -w @myblog/worker run deploy"
+    "seed:demo": "python scripts/seed-demo.py",
+    "fix:lock": "python scripts/fix-lock-platforms.py",
+    "test:e2e": "python test_all.py",
+    "deploy": "npm run build && npm -w @myblog/worker run deploy",
+    "deploy:ci": "npm run build:ci && npm -w @myblog/worker exec wrangler deploy"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",

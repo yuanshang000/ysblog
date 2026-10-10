@@ -153,6 +153,20 @@ npx wrangler secret delete ADMIN_SETUP_TOKEN
 
 ## GitHub 自动部署
 
+本项目采用**GitHub Actions**（不是 Cloudflare 内置的 Git 集成），原因见下方说明。
+
+### 为什么不用 Cloudflare 内置 Git 集成
+
+Cloudflare 控制台的 Workers Git 集成有三个限制：
+
+1. **没有 Build output directory** —— 那是 Pages 才有的字段；Workers 的产物由 `wrangler deploy` 自行上传
+2. **无法在部署前执行数据库迁移** —— 迁移必须单独跑
+3. **Node 版本固定死**（通常 18/20），无法选择
+
+GitHub Actions 可完全控制流程：类型检查 → 测试 → 构建 → 迁移 → 部署，任一步失败即中止。
+
+工作流文件已包含在仓库中：`.github/workflows/deploy.yml`（62 行，10 个步骤）。
+
 ### 1. 推送代码
 
 ```bash
@@ -164,36 +178,80 @@ git remote add origin https://github.com/<你的用户名>/my-blog.git
 git push -u origin main
 ```
 
-### 2. 在 Cloudflare 连接 GitHub
+### 2. 配置 GitHub Secrets
 
-1. Cloudflare 控制台 → Workers & Pages → Create → **Connect to Git**
-2. 选择 `my-blog` 仓库
-3. **构建配置**：
+仓库 → Settings → Secrets and variables → Actions → New repository secret：
 
-| 配置项 | 值 |
-| --- | --- |
-| Build command | `npm ci && npm run build` |
-| Deploy command | `npx wrangler deploy` |
-| Root directory | 留空（仓库根目录） |
-| Build output directory | `apps/worker/public` |
+| Secret 名称 | 值 | 获取方式 |
+| --- | --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Workers 部署令牌 | Cloudflare → My Profile → API Tokens → Create Token，选模板 **Edit Cloudflare Workers** |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账户 ID | Cloudflare 控制台右侧边栏可见 |
 
-4. 环境变量：把 `vars` 中的配置填入（`SESSION_SECRET` 等敏感值在 Settings → Variables and Secrets 中设为 **Secret** 类型）
+### 3. 首次启用
 
-之后每次 push 到 `main` 即自动构建部署。
+推送到 `main` 即自动触发。可在仓库 Actions 页面查看执行日志。
 
-### 3. 数据库迁移的注意事项
+工作流执行顺序：
 
-GitHub 自动部署**不会**自动执行迁移（避免未验证的脚本改动生产库）。正确流程：
-
-```bash
-# 1. 先在本地验证迁移脚本
-npm run db:migrate:local
-
-# 2. 确认无误后手动执行线上迁移
-npm run db:migrate:remote
+```
+checkout → setup-node（npm 缓存） → npm ci → 类型检查 → 单元测试
+        → build:ci（含产物完整性校验） → 拉取凭据
+        → 数据库迁移 → wrangler deploy
 ```
 
----
+任一步失败都会中止，不会部署半成品。
+
+### 关键命令说明
+
+```bash
+npm ci                # 严格按 lock 安装（CI 用）
+npm run build:ci      # 清理 + 构建前台 + 构建后台 + 校验产物
+npm run typecheck     # Worker tsc + 后台vue-tsc
+```
+
+`build:ci` 末尾会执行 `scripts/verify-build-assets.mjs`，校验：
+
+- `islands/app.js` 存在且体积合理
+- `admin/app.htm` 存在、含挂载点、引用资源全部真实存在
+
+这一步能在部署前拦住「后台资源缺失导致白屏」类问题——因为这类问题在 `wrangler deploy` 时不会报错。
+
+### 常见构建失败与处理
+
+| 报错 | 原因 | 处理 |
+| --- | --- | --- |
+| `npm ci can only install packages when... in sync` | lock 文件缺当前平台的二进制包（Windows 上生成时只记录 win32） | 运行 `npm run fix:lock` 补全，然后提交 lock |
+| `Missing: fsevents@2.3.3 from lock file` | 同上 | `npm run fix:lock` |
+| 后台部署后白屏 | `admin/app.htm` 缺失 | 本地跑 `npm run build:ci` 看校验输出 |
+| 部署报找不到 D1 | `wrangler.jsonc` 里`database_id` 仍是占位符 | 填入真实 ID |
+| 部署成功但接口 500 | 未配置 `SESSION_SECRET` 等 Secret | `npx wrangler secret put SESSION_SECRET` |
+
+### lock 文件的平台包问题（重要）
+
+npm 生成 `package-lock.json` 时**只记录当前操作系统**的二进制可选依赖。在 Windows 上开发时，
+lock 里只有 `win32-x64`，而 Cloudflare 的构建环境是 Linux，`npm ci` 会直接失败。
+
+本项目提供了修复脚本：
+
+```bash
+npm run fix:lock   # 补全所有平台的 esbuild / rollup 二进制包
+```
+
+脚本会从 npm registry 抓取各平台的真实 integrity 与 tarball 地址后写入 lock，
+并跳过 registry 上不存在的平台（如 `@rollup/rollup-linux-arm64` 实际不存在，属正常）。
+
+**若在 Windows 上新增了依赖，务必重新执行一次 `npm run fix:lock` 再提交 lock。**
+
+### 数据库迁移说明
+
+本工作流**已包含**迁移步骤（部署前执行）。若迁移失败，部署不会继续 —— 这正是期望行为：
+避免代码已部署但表结构不匹配导致运行时 500。
+
+本地验证迁移：
+
+```bash
+npm run db:migrate:local   # 在 .tmp/d1 本地库执行
+```
 
 ## 费用控制
 

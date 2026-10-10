@@ -1,0 +1,62 @@
+name: 部署到 Cloudflare
+
+# 触发条件：推送到 main 分支时自动部署
+on:
+  push:
+    branches: [main]
+  # 手动触发
+  workflow_dispatch:
+
+concurrency:
+  # 同一分支的并发部署取消旧的，避免资源竞争
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: 构建并部署
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js 20（启用 npm 缓存）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # 缓存键包含 package-lock.json 哈希，lock 变更（如补全平台包）时自动失效
+          cache: 'npm'
+
+      - name: 安装依赖
+        # 用 npm ci 严格按 lock 安装，保证与本地一致
+        run: npm ci --no-audit --no-fund
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm test -- --run
+
+      # 构建前台 + 后台，并校验产物完整性
+      - name: 构建前端资源
+        run: npm run build:ci
+
+      - name: 拉取 Cloudflare 部署凭据
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # 迁移放在构建之后、部署之前：
+      # 迁移失败则不部署，避免代码与数据库结构不匹配
+      - name: 执行数据库迁移
+        run: npx wrangler d1 migrations apply myblog --remote
+
+      - name: 部署
+        run: npx wrangler deploy
+        env:
+          ENVIRONMENT: production
+
+      - name: 输出访问地址
+        run: echo "部署完成，访问 Cloudflare 控制台查看域名"
