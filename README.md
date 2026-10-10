@@ -109,6 +109,7 @@ my-blog/
 | --- | --- |
 | [docs/deployment.md](docs/deployment.md) | 首次部署、GitHub 自动部署、环境变量、密钥管理 |
 | [docs/deploy-checklist.md](docs/deploy-checklist.md) | 部署前需要准备哪些凭据（含获取方式与回滚方案） |
+| **[docs/howto.md](docs/howto.md)** | **日常操作手册：更新代码如何部署 + 如何批量导入文章** |
 | [docs/api.md](docs/api.md) | 全部 REST API 接口说明 |
 | [docs/backup-restore.md](docs/backup-restore.md) | 数据备份与恢复（已验证流程） |
 | [docs/architecture.md](docs/architecture.md) | 架构决策与安全设计 |
