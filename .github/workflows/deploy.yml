@@ -56,8 +56,23 @@ jobs:
       # R2 桶不存在才创建。已存在时 wrangler 会报错，用 || true 兜底。
       - name: 确认 R2 存储桶存在
         run: |
-          if npx wrangler r2 bucket list 2>/dev/null | grep -q "myblog-media"; then
-            echo "R2桶 myblog-media 已存在，跳过创建"
+          set -euo pipefail
+          # 精确匹配桶名。用表格解析而非 grep 子串：
+          # myblog-media-staging 会被 grep "myblog-media" 误判为已存在。
+          if npx wrangler r2 bucket list 2>/dev/null | node -e '
+            const target = "myblog-media";
+            let buf = "";
+            process.stdin.on("data", d => buf += d);
+            process.stdin.on("end", () => {
+              for (const raw of buf.split(/\r?\n/)) {
+                const line = raw.trim();
+                if (!line.startsWith("│")) continue;
+                const name = line.replace(/^│/, "").replace(/│$/, "").split("│")[0].trim();
+                if (name === target) { console.log("FOUND"); return; }
+              }
+            });
+          ' | grep -q FOUND; then
+            echo "R2 桶 myblog-media 已存在，跳过创建"
           else
             echo "创建 R2 桶 myblog-media…"
             npx wrangler r2 bucket create myblog-media
