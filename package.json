@@ -29,7 +29,8 @@
     "fix:lock": "python scripts/fix-lock-platforms.py",
     "test:e2e": "python test_all.py",
     "deploy": "npm run build && npm -w @myblog/worker run deploy",
-    "deploy:ci": "npm run build:ci && npm -w @myblog/worker exec wrangler deploy"
+    "deploy:ci": "npm run build:ci && npm -w @myblog/worker exec wrangler deploy",
+    "import:md": "node scripts/import-markdown.mjs"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
