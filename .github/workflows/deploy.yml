@@ -65,13 +65,24 @@ jobs:
       # D1 必须先创建才能拿到 database_id。
       # 用独立脚本而非内联 JSON 解析 —— wrangler 各版本 d1 list --json 的字段名不一致，
       # 且脚本可本地实测（见 scripts/ensure-d1.sh 头部注释）。
+      #
+      # 重要：仅当配置里仍是占位符时才去查询。
+      # 对于已经把真实 database_id 填进仓库的部署，跳过本步骤可避免
+      # 因 API Token 缺少 D1 读权限而让整个流水线失败 ——
+      # database_id 本来就已经是确定的了，没必要为此多一道权限依赖。
       - name: 确认 D1 数据库存在
         id: d1
         run: |
+          set -euo pipefail
+          if ! grep -q "REPLACE_WITH_YOUR_D1_ID" wrangler.jsonc; then
+            echo "wrangler.jsonc 中已有真实 database_id，跳过 D1 查询"
+            echo "database_id=already-configured" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           chmod +x scripts/ensure-d1.sh
-          ID=$(./scripts/ensure-d1.sh myblog)
+          ID=$(./scripts/ensure-d1.sh myblog || true)
           if [ -z "$ID" ]; then
-            echo "::error::未能获取 D1 database_id，部署中止"
+            echo "::error::未能获取 D1 database_id（若 Token 缺少 D1 权限，可手动把 database_id 填入 wrangler.jsonc）"
             exit 1
           fi
           echo "database_id=$ID" >> "$GITHUB_OUTPUT"
@@ -85,12 +96,21 @@ jobs:
             echo "::error::未能获取 database_id，无法继续部署"
             exit 1
           fi
+
+          # 上一步判定配置中已有真实 ID 时会输出 already-configured，
+          # 此时无需也不能再做替换，否则会把该标记写进 wrangler.jsonc。
+          if [ "$ID" = "already-configured" ]; then
+            echo "配置中已是真实 database_id，无需回填"
+            grep -n "database_id" wrangler.jsonc | head -2
+            exit 0
+          fi
+
           echo "使用 database_id=$ID"
           sed -i "s/REPLACE_WITH_YOUR_D1_ID/$ID/g" wrangler.jsonc
 
           # 校验默认环境的占位符已替换。
           # 注意：staging 的 REPLACE_WITH_STAGING_D1_ID 不阻塞本次部署
-          #（deploy 只读默认环境），它由staging 的独立工作流或手动部署处理。
+          #（deploy 只读默认环境），它由 staging 的独立工作流或手动部署处理。
           if grep -q "REPLACE_WITH_YOUR_D1_ID" wrangler.jsonc; then
             echo "::error::默认环境的 database_id 回填失败，占位符仍存在"
             exit 1
