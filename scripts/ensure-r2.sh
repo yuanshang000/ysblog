@@ -53,13 +53,20 @@ bucket_exists() {
 
 log "检查 R2 存储桶：$BUCKET"
 
-if bucket_exists | grep -q FOUND; then
+# 注意：这里不能用 `if bucket_exists | grep -q FOUND`。
+# grep -q 命中后会立刻关闭管道，导致上游 node 收到 SIGPIPE 并以非零码退出；
+# 在 `set -o pipefail` 下这会让整个管道返回失败，从而把「桶已存在」误判为「不存在」。
+# 因此改为把结果收进变量里再用 case 判断。
+EXISTS="$(bucket_exists || true)"
+
+if [ "$EXISTS" = "FOUND" ]; then
   log "R2 桶 $BUCKET 已存在，跳过创建"
 else
   log "创建 R2 桶 $BUCKET…"
   # 桶可能在此期间被并发创建，create 报错时复查一次再决定是否失败
   if ! npx wrangler r2 bucket create "$BUCKET"; then
-    if bucket_exists | grep -q FOUND; then
+    RETRY="$(bucket_exists || true)"
+    if [ "$RETRY" = "FOUND" ]; then
       log "创建返回失败但桶已存在（并发创建），继续"
     else
       log "错误：创建 R2 桶 $BUCKET 失败"
