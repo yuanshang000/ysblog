@@ -32,7 +32,7 @@ async function loadConnectionString() {
 }
 
 async function main() {
-  const conn = loadConnectionString();
+  const conn = await loadConnectionString();
   if (!conn) {
     console.error('✗ 未找到数据库连接串');
     console.error('  请设置环境变量 POSTGRES_URL，或在 .env.local 中写入：');
