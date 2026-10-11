@@ -129,16 +129,38 @@ jobs:
       # 迁移放在部署之前：
       # 迁移失败则不部署，避免代码已上线但表结构不匹配导致运行时 500
       - name: 执行数据库迁移
+        id: migrate
         run: |
           set -euo pipefail
-          # 先打印诊断信息：CI 失败时无需再翻日志即可判断是凭据还是网络问题。
-          # 注意只输出「是否存在」与脱敏后的 ID，不打印任何密钥。
-          echo "CLOUDFLARE_API_TOKEN 是否已设置: ${CLOUDFLARE_API_TOKEN:+是}${CLOUDFLARE_API_TOKEN:-否}"
+          echo "CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:+已设置}${CLOUDFLARE_API_TOKEN:-未设置}"
           echo "CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-未设置}"
-          echo "待应用的迁移文件："
-          ls -1 migrations/
-          echo "--- 开始迁移 ---"
-          npx wrangler d1 migrations apply myblog --remote
+          echo "迁移文件：$(ls -1 migrations/ | tr '\n' ' ')"
+          echo "--- 迁移输出开始 ---"
+          # 用 tee 同时保留输出与退出码：既能把真实报错打印到日志，
+          # 又能拿到 wrangler 的退出码（PIPESTATUS[0] 才是 wrangler 的）。
+          set +e
+          npx wrangler d1 migrations apply myblog --remote 2>&1 | tee /tmp/migrate.log
+          CODE=${PIPESTATUS[0]}
+          set -e
+          echo "--- 迁移输出结束（退出码 $CODE）---"
+          if [ "$CODE" -ne 0 ]; then
+            # 逐行输出为 error 注释：注释内容会进入 check-run annotations，
+            # 无需打开（需登录的）完整日志页也能看到失败原因。
+            # 单条注释有长度上限，故截取尾部——真正的报错通常在最后。
+            echo "::error::数据库迁移失败，退出码 $CODE。wrangler 输出尾部："
+            tail -25 /tmp/migrate.log | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            # 同时写入 job 摘要，便于在 Actions 页面直接查看
+            {
+              echo '### 数据库迁移失败'
+              echo '```'
+              tail -40 /tmp/migrate.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$CODE"
+          fi
+          echo "✅ 迁移完成（可能无待应用项）"
 
       - name: 部署
         run: npx wrangler deploy
