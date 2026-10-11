@@ -146,16 +146,21 @@ jobs:
           if [ "$CODE" -ne 0 ]; then
             # 逐行输出为 error 注释：注释内容会进入 check-run annotations，
             # 无需打开（需登录的）完整日志页也能看到失败原因。
-            # 单条注释有长度上限，故截取尾部——真正的报错通常在最后。
-            echo "::error::数据库迁移失败，退出码 $CODE。wrangler 输出尾部："
-            tail -25 /tmp/migrate.log | while IFS= read -r line; do
-              echo "::error::$line"
-            done
+            # 输出「全部非空行」而非尾部：wrangler 的真实报错常在版本警告之前，
+            # 只取尾部会正好把它截掉。
+            echo "::error::数据库迁移失败，退出码 $CODE。wrangler 完整输出："
+            # 去掉 CR 与 GitHub 命令里的元字符（% \r），否则会破坏注解解析
+            tr -d '\r' < /tmp/migrate.log \
+              | grep -v '^[[:space:]]*$' \
+              | sed 's/%/%25/g' \
+              | while IFS= read -r line; do
+                  echo "::error::$line"
+                done
             # 同时写入 job 摘要，便于在 Actions 页面直接查看
             {
               echo '### 数据库迁移失败'
               echo '```'
-              tail -40 /tmp/migrate.log
+              cat /tmp/migrate.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             exit "$CODE"
