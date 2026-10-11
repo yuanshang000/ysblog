@@ -59,6 +59,11 @@ jobs:
       - name: 确认 R2 存储桶存在
         run: |
           set -euo pipefail
+          echo "API Token: ${CLOUDFLARE_API_TOKEN:+已设置}${CLOUDFLARE_API_TOKEN:-未设置}"
+          echo "Account ID: ${CLOUDFLARE_ACCOUNT_ID:-未设置}"
+          echo "--- R2 原始输出 ---"
+          npx wrangler r2 bucket list 2>&1 | head -30
+          echo "--- 开始检查 ---"
           chmod +x scripts/ensure-r2.sh
           ./scripts/ensure-r2.sh myblog-media
 
@@ -121,7 +126,16 @@ jobs:
       # 迁移放在部署之前：
       # 迁移失败则不部署，避免代码已上线但表结构不匹配导致运行时 500
       - name: 执行数据库迁移
-        run: npx wrangler d1 migrations apply myblog --remote
+        run: |
+          set -euo pipefail
+          # 先打印诊断信息：CI 失败时无需再翻日志即可判断是凭据还是网络问题。
+          # 注意只输出「是否存在」与脱敏后的 ID，不打印任何密钥。
+          echo "CLOUDFLARE_API_TOKEN 是否已设置: ${CLOUDFLARE_API_TOKEN:+是}${CLOUDFLARE_API_TOKEN:-否}"
+          echo "CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-未设置}"
+          echo "待应用的迁移文件："
+          ls -1 migrations/
+          echo "--- 开始迁移 ---"
+          npx wrangler d1 migrations apply myblog --remote
 
       - name: 部署
         run: npx wrangler deploy
