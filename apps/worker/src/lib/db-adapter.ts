@@ -257,17 +257,32 @@ function normalizeParams(values: unknown[]): unknown[] {
  * 与原 SQLite 的 strftime('%Y-%m-%d %H:%M:%S') 输出格式保持一致，
  * 从而让上层的日期比较、字符串截断逻辑无需改动。
  */
-function normalizeRow(row: Record<string, unknown>): Record<string, unknown> {
+export function normalizeRow(row: Record<string, unknown>): Record<string, unknown> {
   for (const [k, v] of Object.entries(row)) {
     if (v instanceof Date) {
       row[k] = v.toISOString().replace('T', ' ').slice(0, 19);
     } else if (typeof v === 'bigint') {
       // BIGINT 在 pg 中默认返回字符串；转成 number 以匹配原INTEGER 行为
       row[k] = Number(v);
+    } else if (typeof v === 'string' && NUMERIC_STRING_RE.test(v)) {
+      /**
+       * COUNT(*) / SUM() 等聚合在 Postgres 中返回 bigint，pg 驱动默认以字符串给出。
+       * 业务代码与共享类型都按 number 使用（SQLite 的 COUNT 本来就是 number），
+       * 若不还原，会出现 `0 + '3' === '03'` 这类字符串拼接，
+       * 例如后台工作台的 totalPosts 显示为 "03000"。
+       *
+       * 这里把「纯数字组成的字符串」还原成 number。
+       * 排除前导零、小数点、指数、空串，避免误伤本就该是文本的列
+       * （如 slug "007"、版本号 "1.2.3"）。
+       */
+      row[k] = Number(v);
     }
   }
   return row;
 }
+
+/** 纯整数字符串，且不以 0 开头（"0" 与 "03000" 这类不转换） */
+const NUMERIC_STRING_RE = /^(0|[1-9]\d*)$/;
 
 export function createStatement(sql: string): StatementStub {
   let values: unknown[] = [];

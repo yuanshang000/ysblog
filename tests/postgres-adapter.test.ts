@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { rewriteSql } from '../apps/worker/src/lib/db-adapter';
+import { rewriteSql, normalizeRow } from '../apps/worker/src/lib/db-adapter';
 
 describe('SQLite → Postgres 方言转换', () => {
   it('占位符 ? 转为 $n 并按顺序编号', () => {
@@ -103,5 +103,47 @@ describe('SQLite → Postgres 方言转换', () => {
     // Postgres 没有 date() 函数，残留即报错
     expect(out).not.toMatch(/\bdate\(/i);
     expect(out).toContain('TO_CHAR');
+  });
+});
+
+describe('Postgres 行归一（对齐 SQLite 的返回类型）', () => {
+  // 回归用例：COUNT(*) 在 Postgres 返回 bigint，pg 驱动给出字符串 "3"，
+  // 业务代码 `0 + '3'` 得到 "03"，后台工作台 totalPosts 曾显示为 "03000"。
+
+  it('纯数字字符串还原为 number', () => {
+    const r = normalizeRow({ published: '3', draft: '0' });
+    expect(r.published).toBe(3);
+    expect(r.draft).toBe(0);
+  });
+
+  it('还原后可正确参与数值累加', () => {
+    const counts = normalizeRow({ a: '3', b: '2' });
+    const total = Object.values(counts).reduce((x, y) => (x as number) + (y as number), 0);
+    expect(total).toBe(5);
+  });
+
+  it('bigint 原生类型同样转number', () => {
+    const r = normalizeRow({ n: 42n });
+    expect(r.n).toBe(42);
+  });
+
+  it('Date 归一为 SQLite 风格的日期字符串', () => {
+    const r = normalizeRow({ created_at: new Date('2026-10-11T06:13:30Z') });
+    expect(r.created_at).toBe('2026-10-11 06:13:30');
+  });
+
+  it('不应误转的业务文本', () => {
+    const r = normalizeRow({
+      slug: '007',
+      version: '1.2.3',
+      code: '03000',
+      note: 'why?',
+      title: 'TypeScript 类型体操入门'
+    });
+    expect(r.slug).toBe('007');
+    expect(r.version).toBe('1.2.3');
+    expect(r.code).toBe('03000');
+    expect(r.note).toBe('why?');
+    expect(r.title).toBe('TypeScript 类型体操入门');
   });
 });
