@@ -27,14 +27,15 @@
 
 > 建议用 API Token 而不是 Global API Key —— 前者可限定权限范围，后者是账户全权限，风险更高。
 
-> **常见问题：部署在「确认 R2 存储桶存在」这一步失败**
+> **常见问题：部署报「it's necessary to set a CLOUDFLARE_API_TOKEN environment variable」**
 >
-> 该步骤依赖 `r2 bucket list` 与 `r2 bucket create`，两者都需要 Token 具备 `Account: R2 — Edit`。
-> 若 Token 缺少 R2 权限，这一步会失败（查看日志会看到鉴权错误），而真正的部署其实并未执行。
+> 这不是权限不足，而是**凭据没有传入到运行 `wrangler` 的步骤里**。
+> `cloudflare/wrangler-action` 只用它自己的 `apiToken` / `accountId` 输入完成登录动作，
+> 并不会把这两个变量导出为后续 `run` 步骤的环境变量。
+> 而本工作流的 R2 检查、D1 查询、迁移、部署都是直接 `npx wrangler ...`，
+> 因此必须自行把 secrets 写入 `$GITHUB_ENV`（工作流中的「导出 Cloudflare 环境变量」步骤）。
 >
-> 处理方式：回到 <https://dash.cloudflare.com/profile/api-tokens> 编辑该 Token，补上 `Account: R2 — Edit` 后重新运行工作流。
->
-> 另外注意，R2 桶在**生产环境**首次创建时，Cloudflare 可能要求先绑定支付方式（免费额度：10GB 存储、每月 1000 万次读写操作）。
+> 如果你自行精简过工作流，请确认该步骤仍然存在。
 
 ---
 

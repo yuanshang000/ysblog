@@ -72,13 +72,12 @@ if ! npx wrangler r2 bucket create "$BUCKET"; then
     log "创建返回失败但桶已存在（并发创建），继续"
     exit 0
   fi
-  # 查不到也创建不了时，多半是 API Token 缺少 R2 权限。
-  # 此时若桶其实早已手工创建，部署仍可继续 —— 部署真正的硬性前提是 Worker 能绑定它，
-  # 那一步会在 deploy 阶段给出明确报错，因此这里只告警不中止，避免把权限问题
-  # 伪装成「桶不存在」而误导排查方向。
-  log "警告：无法确认或创建 R2 桶 $BUCKET（可能是 API Token 缺少 R2 读写权限）"
-  log "警告：继续部署；若桶确实不存在，wrangler deploy 会因绑定失败而报错。"
-  exit "${STRICT_R2:-0}"
+  # 查不到也创建不了：多半是 API Token 缺少 R2 权限，或桶被占用同名冲突。
+  # 这里必须明确失败——静默放行会让问题推迟到 deploy 阶段才暴露，且那时
+  # 报错会指向「绑定失败」而非「权限不足」，显著增加排查成本。
+  log "错误：无法确认或创建 R2 桶 $BUCKET"
+  log "请检查：1) API Token 是否包含 Account: R2 — Edit；2) 是否存在同名桶但无权限访问"
+  exit 1
 fi
 
 log "R2 桶 $BUCKET 就绪"
