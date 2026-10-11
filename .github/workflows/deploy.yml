@@ -46,11 +46,26 @@ jobs:
       - name: 构建前端资源
         run: npm run build:ci
 
+      # ---- 凭据注入 ----
+      # 关键：wrangler-action 只用它自己的输入去完成登录动作，
+      # 并不会把 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID 导出为后续步骤的环境变量。
+      # 因此凡是本工作流里直接调用 `npx wrangler ...` 的步骤，
+      # 都必须自己从 secrets 显式注入这两个变量，否则非交互环境下会报
+      # 「it's necessary to set a CLOUDFLARE_API_TOKEN environment variable」。
       - name: 拉取 Cloudflare 凭据
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: 导出 Cloudflare 环境变量
+        run: |
+          # 直接从 secrets 取值写入 GITHUB_ENV，比依赖 wrangler-action 的副作用可靠：
+          # 后者只用于完成自身的登录动作，并不会把凭据导出给后续 run 步骤。
+          echo "::add-mask::${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          echo "CLOUDFLARE_API_TOKEN=${{ secrets.CLOUDFLARE_API_TOKEN }}" >> "$GITHUB_ENV"
+          echo "CLOUDFLARE_ACCOUNT_ID=${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" >> "$GITHUB_ENV"
+          echo "凭据已导出到后续步骤的环境变量"
 
       # ---- 基础设施准备（幂等：已存在则跳过）----
       # R2 桶不存在才创建。解析逻辑放在 scripts/ensure-r2.sh：
