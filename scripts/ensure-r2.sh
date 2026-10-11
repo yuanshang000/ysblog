@@ -61,17 +61,24 @@ EXISTS="$(bucket_exists || true)"
 
 if [ "$EXISTS" = "FOUND" ]; then
   log "R2 桶 $BUCKET 已存在，跳过创建"
-else
-  log "创建 R2 桶 $BUCKET…"
-  # 桶可能在此期间被并发创建，create 报错时复查一次再决定是否失败
-  if ! npx wrangler r2 bucket create "$BUCKET"; then
-    RETRY="$(bucket_exists || true)"
-    if [ "$RETRY" = "FOUND" ]; then
-      log "创建返回失败但桶已存在（并发创建），继续"
-    else
-      log "错误：创建 R2 桶 $BUCKET 失败"
-      exit 1
-    fi
-  fi
-  log "R2 桶 $BUCKET 就绪"
+  exit 0
 fi
+
+log "创建 R2 桶 $BUCKET…"
+# 桶可能在此期间被并发创建，create 报错时复查一次再决定是否失败
+if ! npx wrangler r2 bucket create "$BUCKET"; then
+  RETRY="$(bucket_exists || true)"
+  if [ "$RETRY" = "FOUND" ]; then
+    log "创建返回失败但桶已存在（并发创建），继续"
+    exit 0
+  fi
+  # 查不到也创建不了时，多半是 API Token 缺少 R2 权限。
+  # 此时若桶其实早已手工创建，部署仍可继续 —— 部署真正的硬性前提是 Worker 能绑定它，
+  # 那一步会在 deploy 阶段给出明确报错，因此这里只告警不中止，避免把权限问题
+  # 伪装成「桶不存在」而误导排查方向。
+  log "警告：无法确认或创建 R2 桶 $BUCKET（可能是 API Token 缺少 R2 读写权限）"
+  log "警告：继续部署；若桶确实不存在，wrangler deploy 会因绑定失败而报错。"
+  exit "${STRICT_R2:-0}"
+fi
+
+log "R2 桶 $BUCKET 就绪"
