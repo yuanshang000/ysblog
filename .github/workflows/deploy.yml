@@ -62,7 +62,10 @@ jobs:
           echo "API Token: ${CLOUDFLARE_API_TOKEN:+已设置}${CLOUDFLARE_API_TOKEN:-未设置}"
           echo "Account ID: ${CLOUDFLARE_ACCOUNT_ID:-未设置}"
           echo "--- R2 原始输出 ---"
-          npx wrangler r2 bucket list 2>&1 | head -30
+          # 这里不能加 `set -o pipefail` 敏感的写法：诊断命令本身失败会让整个步骤
+          # 在到达真正的检查逻辑之前就中止，比没有诊断更糟。
+          # 因此显式忽略其退出码，诊断信息照常打印，检查逻辑照常执行。
+          npx wrangler r2 bucket list 2>&1 | head -30 || true
           echo "--- 开始检查 ---"
           chmod +x scripts/ensure-r2.sh
           ./scripts/ensure-r2.sh myblog-media
