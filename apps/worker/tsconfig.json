@@ -5,6 +5,6 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "api/**/*.ts", "../../packages/shared/src/**/*.ts"],
+  "include": ["src/**/*.ts", "../../packages/shared/src/**/*.ts"],
   "exclude": ["../../packages/shared/src/api-client.ts"]
 }

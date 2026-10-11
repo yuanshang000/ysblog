@@ -2,9 +2,9 @@
 node_modules/
 .pnpm-store/
 
-# 构建产物 —— 由 CI 的 npm run build:ci 生成，不应入库
-# （入库会导致仓库里的旧哈希文件与 CI 新构建的产物冲突）
+# 构建产物 —— 由 npm run build:vercel 生成，不应入库
 dist/
+dist-server/
 apps/worker/public/admin/
 apps/worker/public/islands/
 apps/worker/public/assets/
@@ -34,3 +34,4 @@ backups/
 
 # 截图（调试用）
 .shots/
+.env*.local

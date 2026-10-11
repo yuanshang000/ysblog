@@ -5,19 +5,18 @@
   "installCommand": "npm install",
   "framework": null,
   "functions": {
-    "apps/worker/api/index.ts": {
-      "memory": 1024,
-      "maxDuration": 30
+    "api/index.ts": {
+      "maxDuration": 30,
+      "includeFiles": "dist-server/_worker.mjs"
     }
   },
   "rewrites": [
-    { "source": "/api/cron", "destination": "/api/cron" },
-    { "source": "/((?!api/|media/|admin/|assets/|islands/).*)", "destination": "/api/index" }
+    { "source": "/((?!media/|admin/|assets/|islands/).*)", "destination": "/api/index" }
   ],
   "crons": [
     {
       "path": "/api/cron",
-      "schedule": "*/10 * * * *"
+      "schedule": "0 3 * * *"
     }
   ],
   "headers": [

@@ -9,7 +9,55 @@
  * 这里只负责协议转换，不含任何业务判断。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import handler, { cronHandler } from '../src/index';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+/**
+ * 业务代码已由 scripts/build-worker.mjs 在构建阶段打包为 dist-server/_worker.mjs（ESM），
+ * 并通过 vercel.json 的 includeFiles 带进本 Function 的产物目录。
+ * 本文件被 Vercel 编译为 CommonJS，无法用静态 import 加载 ESM，
+ * 因此用动态 import()，并在模块级缓存避免重复加载。
+ */
+type WorkerModule = {
+  default: (request: Request) => Promise<Response>;
+  cronHandler: (request: Request) => Promise<Response>;
+};
+
+let workerModule: Promise<WorkerModule> | null = null;
+
+/**
+ * 定位预编译产物 _worker.js。
+ *
+ * Vercel 的 includeFiles 会保持相对路径，把文件复制到 Function 产物里的同一相对位置，
+ * 因此线上位于 <cwd>/dist-server/_worker.js；而本地 dev 时 cwd 是项目根，
+ * 同一相对路径同样成立。这里按多个候选位置依次探测，取第一个存在的。
+ */
+const CANDIDATES = [
+  path.join(process.cwd(), 'dist-server', '_worker.mjs'),
+  path.join(process.cwd(), '_worker.mjs'),
+  path.join(process.cwd(), '..', '..', 'dist-server', '_worker.mjs')
+];
+
+function resolveWorkerBundle(): string {
+  const hit = CANDIDATES.find((p) => existsSync(p));
+  if (!hit) {
+    console.error('[vercel] 未找到预编译产物 _worker.js，候选路径：', CANDIDATES, 'cwd=', process.cwd());
+    throw new Error('预编译产物缺失，请确认构建流程包含 npm run build:worker');
+  }
+  return hit;
+}
+
+function loadWorker(): Promise<WorkerModule> {
+  workerModule ??= (async () => {
+    const fileUrl = pathToFileURL(resolveWorkerBundle()).href;
+    // Vercel 把本文件编译为 CommonJS，TypeScript 可能把 import() 降级成 require()，
+    // 那会再次触发 ERR_REQUIRE_ESM。用 Function 构造器保留原生动态 import 语义。
+    const dynamicImport = new Function('u', 'return import(u)') as (u: string) => Promise<WorkerModule>;
+    return dynamicImport(fileUrl);
+  })();
+  return workerModule;
+}
 
 /** 读取请求体 */
 function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -80,6 +128,7 @@ export default async function vercelHandler(req: IncomingMessage, res: ServerRes
     const origin = `${proto}://${forwardedHost}`;
 
     const request = await toWebRequest(req, origin);
+    const { default: handler, cronHandler } = await loadWorker();
 
     // 定时任务端点单独路由
     const webResponse =
