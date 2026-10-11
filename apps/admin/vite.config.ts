@@ -8,10 +8,9 @@ import { join } from 'node:path';
  * 后台管理端构建：产出 SPA 到 apps/worker/public/admin/。
  *
  * 关键：产物入口落地为 app.htm 而非 index.html。
- * 原因：wrangler 3.x 本地模拟器（miniflare）对 .html 请求有特殊处理——
- * 用 ASSETS 绑定读取 index.html 会返回空/404，而 .htm 扩展名可正常读取。
- * 这是实测结论（.htm → 1014 字节，.html → 404），不是配置问题。
- * 生产环境的 Cloudflare 边缘网络不存在该差异，但保持一致命名可避免环境差异。
+ * 原因：服务端在 dev 环境用静态目录提供后台壳，历史上为兼容
+ * miniflare 的 .html 处理逻辑而改用 .htm 扩展名（实测 .htm 可正常读取，
+ * .html 返回 404）。该命名已沿用至今，保持不变以免破坏既有部署缓存与引用。
  */
 export default defineConfig({
   plugins: [

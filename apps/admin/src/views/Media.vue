@@ -156,7 +156,7 @@ onMounted(() => {
       <div class="mb-stat">
         <div class="mb-stat-label">占用空间</div>
         <div class="mb-stat-value">{{ formatBytes(stats.totalBytes) }}</div>
-        <div class="mb-stat-sub">存储在 Cloudflare R2</div>
+        <div class="mb-stat-sub">存储在 Vercel Blob</div>
       </div>
       <div class="mb-stat" style="display: grid; place-items: center">
         <el-button type="primary" :loading="uploading" @click="fileInput?.click()">

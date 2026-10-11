@@ -2,7 +2,7 @@
   "name": "my-blog",
   "version": "1.0.0",
   "private": true,
-  "description": "MyBlog 个人博客系统 — Vue 3 SSR 前台 + Vue 3 后台 + Cloudflare Workers API + D1 + R2",
+  "description": "MyBlog 个人博客系统 — Vue 3 SSR 前台 + Vue 3 后台 + Vercel Functions API + Vercel Postgres + Vercel Blob",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -25,9 +25,9 @@
     "db:migrate": "node scripts/migrate-postgres.mjs",
     "db:seed": "node scripts/seed-postgres.mjs",
     "db:backup": "node scripts/backup.mjs",
+    "db:setup-admin": "node --experimental-strip-types scripts/setup-admin.ts",
     "seed:demo": "node scripts/seed-postgres.mjs",
     "deploy": "npm run build:vercel && vercel deploy --prod",
-    "deploy:ci": "npm run build:ci && npm -w @myblog/worker exec wrangler deploy",
     "import:md": "node scripts/import-markdown.mjs"
   },
   "devDependencies": {
@@ -42,8 +42,7 @@
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "vitest": "^2.1.8",
-    "vue-tsc": "^2.2.0",
-    "wrangler": "^3.99.0"
+    "vue-tsc": "^2.2.0"
   },
   "engines": {
     "node": ">=20"

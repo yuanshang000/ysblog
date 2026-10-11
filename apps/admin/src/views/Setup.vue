@@ -44,7 +44,7 @@ async function submit(): Promise<void> {
       <el-alert type="info" :closable="false" style="margin-bottom: 16px">
         <template #title>
           <span style="font-size: 12.5px">
-            需要先通过 <code>wrangler secret put ADMIN_SETUP_TOKEN</code> 配置初始化令牌
+            需要先通过 <code>vercel env add ADMIN_SETUP_TOKEN production</code> 配置初始化令牌
           </span>
         </template>
       </el-alert>

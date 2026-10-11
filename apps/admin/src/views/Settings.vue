@@ -216,13 +216,13 @@ onMounted(load);
           <template #title>
             <div style="font-size: 12.5px; line-height: 1.9">
               <div style="font-weight: 600; margin-bottom: 4px">敏感密钥不保存在数据库，也不在此页面配置</div>
-              <div>请使用 Wrangler 命令设置，并定期轮换：</div>
+              <div>请使用 Vercel CLI 设置，并定期轮换：</div>
               <div style="margin-top: 6px">
-                <code>npx wrangler secret put SESSION_SECRET</code><br />
-                <code>npx wrangler secret put IP_HASH_SALT</code><br />
-                <code>npx wrangler secret put ADMIN_SETUP_TOKEN</code>
+                <code>vercel env add SESSION_SECRET production</code><br />
+                <code>vercel env add IP_HASH_SALT production</code><br />
+                <code>vercel env add ADMIN_SETUP_TOKEN production</code>
               </div>
-              <div style="margin-top: 6px">初始化完成后建议删除 <code>ADMIN_SETUP_TOKEN</code>：<code>npx wrangler secret delete ADMIN_SETUP_TOKEN</code></div>
+              <div style="margin-top: 6px">初始化完成后建议删除 <code>ADMIN_SETUP_TOKEN</code>：<code>vercel env rm ADMIN_SETUP_TOKEN production</code></div>
             </div>
           </template>
         </el-alert>
@@ -239,19 +239,19 @@ onMounted(load);
             </template>
           </el-alert>
 
-          <h4 style="font-size: 14px; font-weight: 620; margin: 0 0 8px">导出数据库（D1）</h4>
-          <pre style="background: #f7f8fa; border: 1px solid #e8e8ea; border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; margin: 0 0 16px">npx wrangler d1 export myblog --remote --output backup-$(date +%Y%m%d).sql</pre>
+          <h4 style="font-size: 14px; font-weight: 620; margin: 0 0 8px">导出数据库（Postgres）</h4>
+          <pre style="background: #f7f8fa; border: 1px solid #e8e8ea; border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; margin: 0 0 16px">npm run db:backup</pre>
 
-          <h4 style="font-size: 14px; font-weight: 620; margin: 0 0 8px">同步图片（R2）</h4>
-          <pre style="background: #f7f8fa; border: 1px solid #e8e8ea; border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; margin: 0 0 16px">npx wrangler r2 object sync myblog-media ./backup-media</pre>
+          <h4 style="font-size: 14px; font-weight: 620; margin: 0 0 8px">同步图片（Vercel Blob）</h4>
+          <pre style="background: #f7f8fa; border: 1px solid #e8e8ea; border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; margin: 0 0 16px">npm run db:backup   # 默认同时导出数据库与图片</pre>
 
           <h4 style="font-size: 14px; font-weight: 620; margin: 0 0 8px">恢复数据库</h4>
-          <pre style="background: #f7f8fa; border: 1px solid #e8e8ea; border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; margin: 0 0 16px">npx wrangler d1 execute myblog --remote --file=backup-20260101.sql</pre>
+          <pre style="background: #f7f8fa; border: 1px solid #e8e8ea; border-radius: 8px; padding: 12px; font-size: 12px; overflow-x: auto; margin: 0 0 16px">psql "$POSTGRES_URL" -f backup-20260101.sql</pre>
 
           <h4 style="font-size: 14px; font-weight: 620; margin: 0 0 8px">建议的备份频率</h4>
           <ul style="font-size: 13px; line-height: 1.9; color: #57565e; padding-left: 20px; margin: 0">
             <li>发布重要文章后：立即导出一次数据库</li>
-            <li>定期（建议每周）：执行一次数据库导出 + R2 同步</li>
+            <li>定期（建议每周）：执行一次完整导出（数据库 + 图片）</li>
             <li>图片目录与数据库备份必须<b>成对保存</b>，否则文章会出现坏图</li>
             <li>至少保留 3 份历史备份异地存放（如本地 + 云盘）</li>
           </ul>

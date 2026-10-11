@@ -5,21 +5,18 @@
  *      输出 `pbkdf2$iterations$salt$hash`。校验使用定长比较，避免时序侧信道。
  *
  * 迭代次数为何是 10,000 而非 OWASP 建议的 210,000：
- * Cloudflare Workers **免费版单次请求 CPU 硬限制 10 ms**（付费版 5 分钟），
- * 而 210,000 次迭代实测约 41 ms（付费版默认 30 秒），
- * 在免费版上会触发 CPU 超限 —— 异常被 catch 吞掉后，
- * 登录接口一律返回「用户名或密码错误」，且服务端日志无任何线索。
- * 10,000 次实测约 3 ms，留足余量。
- *
- * 升级路径：升级 Workers 付费计划后，把 ITERATIONS 调回 210,000，
- * 并确认 verifyPassword 能在 30 秒内完成（无需改代码，迭代次数存在哈希串里）。
+ * Vercel Functions 的 CPU 配额随套餐变化，10,000 次实测约 3 ms，
+ * 210,000 次约 41 ms，在低配实例上会明显拖慢登录与改密响应。
+ * 迭代次数记录在哈希串里，日后调高无需改代码即可向后兼容。
  *
  * 参考：https://developers.cloudflare.com/workers/platform/limits/
  * 核实日期：2026-10-10
  */
 import { HttpError } from './http';
 
-const ITERATIONS = 10_000;
+/** PBKDF2 迭代轮数。任何写入密码的脚本都必须引用此常量，避免轮数不一致导致登录失败。 */
+export const PASSWORD_ITERATIONS = 10_000;
+const ITERATIONS = PASSWORD_ITERATIONS;
 const KEY_LEN = 32;
 const SALT_LEN = 16;
 

@@ -86,7 +86,7 @@ async function handleLogout(): Promise<void> {
         </a>
       </nav>
 
-      <div class="mb-footer-brand">MyBlog · Cloudflare Workers</div>
+      <div class="mb-footer-brand">MyBlog · Vercel</div>
     </aside>
 
     <div class="mb-main">
