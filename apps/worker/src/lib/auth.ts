@@ -34,14 +34,29 @@ export function getCookie(request: Request, name: string): string | null {
   return parseCookies(request).get(name) ?? null;
 }
 
-function cookieHeader(name: string, value: string, maxAgeSeconds: number, secure: boolean): string {
+/**
+ * 构造 Set-Cookie。
+ *
+ * httpOnly 必须按 cookie 区分：
+ * - 会话 Cookie 需要 HttpOnly，前端 JS 读不到，避免被 XSS 窃取；
+ * - CSRF Cookie 必须「非」HttpOnly，否则前端读不到令牌，所有写操作都会被
+ *   判定为「缺少 CSRF 令牌」。双提交令牌的安全性依赖的是「攻击者无法跨站读取
+ *   本站 Cookie」，而不是令牌本身保密，因此这里刻意不设 HttpOnly。
+ */
+function cookieHeader(
+  name: string,
+  value: string,
+  maxAgeSeconds: number,
+  secure: boolean,
+  httpOnly: boolean
+): string {
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
     'Path=/',
     `Max-Age=${maxAgeSeconds}`,
-    'SameSite=Lax',
-    'HttpOnly'
+    'SameSite=Lax'
   ];
+  if (httpOnly) parts.push('HttpOnly');
   if (secure) parts.push('Secure');
   return parts.join('; ');
 }
@@ -69,9 +84,11 @@ export async function createSession(ctx: Ctx, userId: number): Promise<void> {
     .run();
 
   const secure = isSecure(ctx);
+  const maxAge = Math.floor(SESSION_TTL_MS / 1000);
   ctx.setCookies.push(
-    cookieHeader(SESSION_COOKIE, token, Math.floor(SESSION_TTL_MS / 1000), secure),
-    cookieHeader(CSRF_COOKIE, token, Math.floor(SESSION_TTL_MS / 1000), false)
+    cookieHeader(SESSION_COOKIE, token, maxAge, secure, true),
+    // CSRF 令牌必须可被前端 JS 读取，否则写操作一律报「缺少 CSRF 令牌」
+    cookieHeader(CSRF_COOKIE, token, maxAge, secure, false)
   );
 }
 
@@ -83,8 +100,8 @@ export async function destroySession(ctx: Ctx): Promise<boolean> {
   }
   const secure = isSecure(ctx);
   ctx.setCookies.push(
-    cookieHeader(SESSION_COOKIE, '', 0, secure),
-    cookieHeader(CSRF_COOKIE, '', 0, false)
+    cookieHeader(SESSION_COOKIE, '', 0, secure, true),
+    cookieHeader(CSRF_COOKIE, '', 0, secure, false)
   );
   return true;
 }
@@ -123,6 +140,15 @@ export async function loadSession(ctx: Ctx): Promise<void> {
     role: row.role,
     status: row.status
   };
+
+  // 自愈：CSRF Cookie 缺失或与当前会话不匹配时重新下发。
+  // 这既修复了升级前遗留的 HttpOnly 令牌，也让「刷新页面后重试」真正有效，
+  // 用户不必为了拿回令牌而重新登录。
+  if (getCookie(ctx.request, CSRF_COOKIE) !== token) {
+    ctx.setCookies.push(
+      cookieHeader(CSRF_COOKIE, token, Math.floor(SESSION_TTL_MS / 1000), isSecure(ctx), false)
+    );
+  }
 
   // 滑动续期：剩余不足一半时刷新过期时间
   const expiresMs = Date.parse(row.expires_at.replace(' ', 'T') + 'Z');

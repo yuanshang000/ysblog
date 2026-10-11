@@ -7,6 +7,32 @@
 
 const THEME_KEY = 'mb-theme';
 
+/**
+ * 交互岛生命周期管理。
+ *
+ * 页面内路由会在不刷新文档的前提下替换主体内容并重新挂载交互岛，
+ * 而部分交互（阅读进度、目录高亮、灯箱、抽屉）会在 window/document 上
+ * 注册监听器。若不做统一注销，每次跳转都会叠加一份监听器，
+ * 导致回调执行次数翻倍、进度条抖动等问题。
+ *
+ * 因此这里用 AbortController 作为「一次挂载」的令牌：
+ * 重新挂载前先 abort，上一轮注册的所有监听器会被浏览器自动移除。
+ */
+let mountController: AbortController | null = null;
+
+/** 在当前挂载周期内注册监听器，周期结束后自动失效 */
+function on<T extends EventTarget>(
+  target: T,
+  type: string,
+  handler: EventListenerOrEventListenerObject,
+  options?: AddEventListenerOptions | boolean
+): void {
+  target.addEventListener(type, handler, {
+    ...(typeof options === 'object' ? options : {}),
+    signal: mountController?.signal
+  } as AddEventListenerOptions);
+}
+
 /** 主题切换 */
 function initTheme(): void {
   const toggle = document.querySelector<HTMLElement>('[data-theme-toggle]');
@@ -72,13 +98,13 @@ function initDrawer(): void {
     if ((e.target as HTMLElement).tagName === 'A') close();
   });
 
-  document.addEventListener('keydown', (e) => {
+  on(document, 'keydown', ((e: KeyboardEvent) => {
     if (e.key === 'Escape') close();
-  });
+  }) as EventListener);
 
-  window.addEventListener('resize', () => {
+  on(window, 'resize', (() => {
     if (window.innerWidth > 900) close();
-  });
+  }) as EventListener);
 }
 
 /** 复制链接 */
@@ -150,8 +176,8 @@ function initReadProgress(): void {
     }
   };
 
-  window.addEventListener('scroll', onScroll, { passive: true });
-  window.addEventListener('resize', onScroll);
+  on(window, 'scroll', onScroll, { passive: true });
+  on(window, 'resize', onScroll);
   update();
 }
 
@@ -201,7 +227,8 @@ function initToc(): void {
     ticking = false;
   };
 
-  window.addEventListener(
+  on(
+    window,
     'scroll',
     () => {
       if (!ticking) {
@@ -277,12 +304,12 @@ function initLightbox(): void {
     else if (t.closest('[data-lightbox-prev]')) show(index - 1);
   });
 
-  document.addEventListener('keydown', (e) => {
+  on(document, 'keydown', ((e: KeyboardEvent) => {
     if (box.dataset.open !== 'true') return;
     if (e.key === 'Escape') close();
     else if (e.key === 'ArrowRight') show(index + 1);
     else if (e.key === 'ArrowLeft') show(index - 1);
-  });
+  }) as EventListener);
 
   // 图片加载失败占位
   images.forEach((im) => {
@@ -446,8 +473,172 @@ function initComments(): void {
   load();
 }
 
-/** 启动全部交互岛 */
+/**
+ * 页面内路由（渐进增强式单页导航）。
+ *
+ * 前台页面由 Worker 服务端渲染成完整 HTML。这里在已有 HTML 的基础上，
+ * 拦截站内链接的点击，取回目标页面的 HTML，仅替换 <main> 主体内容，
+ * 并同步标题、描述与地址栏，从而获得接近 SPA 的切换体验。
+ *
+ * 关键约束：
+ * - 必须在服务端已渲染出正确内容的前提下工作，禁用 JS 时退化为普通整页跳转，
+ *   不影响 SEO 与可访问性；
+ * - 任何一步失败（网络错误、非 200、页面结构异常）都回退到浏览器默认跳转，
+ *   保证「点得开」永远优先于「切得顺」；
+ * - 只接管 GET 语义的普通导航，保留 Cmd/Ctrl 点击、新标签页等浏览器原生行为。
+ */
+
+/** 这些路径不属于前台内容区，交由浏览器整页跳转处理 */
+function shouldBypassRoute(url: URL): boolean {
+  return (
+    url.origin !== window.location.origin ||
+    url.protocol !== 'http:' && url.protocol !== 'https:' ||
+    url.pathname.startsWith('/admin') ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/media/')
+  );
+}
+
+/** 把目标页面的 head 关键信息同步到当前文档 */
+function syncHead(doc: Document): void {
+  const pick = (selector: string): string | null =>
+    doc.querySelector(selector)?.getAttribute('content') ?? null;
+
+  const setMeta = (selector: string, value: string | null): void => {
+    if (!value) return;
+    let el = document.head.querySelector<HTMLMetaElement>(selector);
+    if (!el) {
+      el = document.createElement('meta');
+      const [key, val] = selector.replace(/meta\[|\]/g, '').split('=');
+      el.setAttribute(key, val.replace(/["']/g, ''));
+      document.head.appendChild(el);
+    }
+    el.setAttribute('content', value);
+  };
+
+  const title = doc.title;
+  if (title) document.title = title;
+
+  setMeta('meta[name="description"]', pick('meta[name="description"]'));
+  setMeta('meta[property="og:title"]', pick('meta[property="og:title"]'));
+  setMeta('meta[property="og:description"]', pick('meta[property="og:description"]'));
+
+  const canonical = doc.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href;
+  const current = document.head.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+  if (canonical && current) current.href = canonical;
+}
+
+/** 高亮当前栏目，并同步移动端抽屉的展开态 */
+function syncActiveNav(pathname: string): void {
+  document.querySelectorAll<HTMLAnchorElement>('[data-route-link]').forEach((a) => {
+    let target: URL;
+    try {
+      target = new URL(a.getAttribute('href') ?? '', window.location.origin);
+    } catch {
+      return;
+    }
+    const active = target.pathname === pathname ||
+      (target.pathname !== '/' && pathname.startsWith(target.pathname));
+    if (active) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+}
+
+/** 执行一次页面内跳转；返回 false 表示应回退到整页跳转 */
+async function navigate(href: string, push: boolean): Promise<boolean> {
+  let url: URL;
+  try {
+    url = new URL(href, window.location.origin);
+  } catch {
+    return false;
+  }
+  if (shouldBypassRoute(url)) return false;
+
+  try {
+    const res = await fetch(url.pathname + url.search + url.hash, {
+      headers: { 'X-Requested-With': 'fetch' },
+      credentials: 'same-origin',
+      redirect: 'follow'
+    });
+    if (!res.ok) return false;
+
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const nextMain = doc.querySelector<HTMLElement>('#main');
+    const curMain = document.querySelector<HTMLElement>('#main');
+    // 目标页结构不符（可能是接口返回或异常页）时交回浏览器处理
+    if (!nextMain || !curMain) return false;
+
+    curMain.replaceWith(nextMain);
+    syncHead(doc);
+    syncActiveNav(url.pathname);
+
+    if (push) {
+      window.history.pushState({ url: url.pathname + url.search }, '', url.pathname + url.search);
+    }
+
+    // 重新挂载交互岛，并回到顶部
+    boot();
+    if (url.hash) {
+      const target = document.getElementById(decodeURIComponent(url.hash.slice(1)));
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth' });
+        return true;
+      }
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function initRouter(): void {
+  on(document, 'click', ((e: MouseEvent) => {
+    // 仅响应左键普通点击，保留 Cmd/Ctrl/Shift/中键的新标签页行为
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+      return;
+    }
+    const anchor = (e.target as HTMLElement | null)?.closest?.('a');
+    if (!anchor) return;
+
+    const href = anchor.getAttribute('href');
+    if (!href || anchor.hasAttribute('download')) return;
+    // 站外链接、带 target 的链接、纯锚点跳转都不接管
+    if (anchor.target && anchor.target !== '_self') return;
+    if (href.startsWith('#')) return;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith(window.location.origin)) return;
+
+    let url: URL;
+    try {
+      url = new URL(href, window.location.href);
+    } catch {
+      return;
+    }
+    if (shouldBypassRoute(url)) return;
+    //同一页面内（含仅 hash 变化）无需处理
+    if (url.pathname === window.location.pathname && url.search === window.location.search) return;
+
+    e.preventDefault();
+    void navigate(url.href, true);
+  }) as EventListener);
+
+  // 浏览器前进/后退
+  on(window, 'popstate', (() => {
+    void navigate(window.location.href, false);
+  }) as EventListener);
+}
+
+/**
+ * 挂载全部交互岛。
+ *
+ * 每次调用都会开启一个新的挂载周期，并注销上一个周期的所有全局监听器，
+ * 因此可以安全地在页面内路由切换后重复调用。
+ */
 function boot(): void {
+  mountController?.abort();
+  mountController = new AbortController();
+
   initTheme();
   initDrawer();
   initCopyLink();
@@ -459,6 +650,7 @@ function boot(): void {
   initSearch();
   initLazyImages();
   initComments();
+  initRouter();
 }
 
 if (document.readyState === 'loading') {

@@ -11,7 +11,7 @@ const saving = ref(false);
 const activeLocation = ref<'header' | 'footer' | 'social'>('header');
 
 const dialog = ref(false);
-const form = reactive({ id: 0, label: '', href: '', location: 'header' as MenuItem['location'], sortOrder: 0, openInNew: true });
+const form = reactive({ id: 0, label: '', href: '', location: 'header' as MenuItem['location'], sortOrder: 0, openInNew: false });
 
 const locations: { value: MenuItem['location']; label: string; hint: string }[] = [
   { value: 'header', label: '顶部导航', hint: '显示在页头导航栏' },
@@ -64,9 +64,12 @@ function editMenu(m: MenuItem): void {
 async function saveMenu(): Promise<void> {
   if (!form.label.trim()) { ElMessage.warning('请填写菜单名称'); return; }
   if (!form.href.trim()) { ElMessage.warning('请填写链接地址'); return; }
+  // 站内链接一律走页面内路由，强制不在新窗口打开，避免前台出现割裂的新标签页
+  const internal = !/^https?:\/\//i.test(form.href.trim());
+  const payload = { ...form, href: form.href.trim(), openInNew: internal ? false : form.openInNew };
   try {
-    if (form.id) menus.value = await menuApi.update(form.id, form);
-    else menus.value = await menuApi.create(form);
+    if (form.id) menus.value = await menuApi.update(form.id, payload);
+    else menus.value = await menuApi.create(payload);
     ElMessage.success('已保存');
     dialog.value = false;
   } catch (e) {

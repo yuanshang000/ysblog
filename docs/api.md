@@ -37,9 +37,14 @@
 
 - 登录后服务端下发两个 Cookie：
   - `mb_session` — **HttpOnly** + SameSite=Lax，JS 不可读
-  - `mb_csrf` — 供前端读取并回传
+  - `mb_csrf` — **必须不带 HttpOnly**（SameSite=Lax），供前端 JS 读取并回传
 - 所有写操作（POST/PUT/PATCH/DELETE）必须携带请求头 `X-CSRF-Token`，值与 `mb_csrf` Cookie 一致
 - 写操作还校验 `Origin` / `Referer` 是否在白名单内
+- 若请求中的 `mb_csrf` 缺失或与会话不匹配，服务端会在会话校验阶段自动重新下发，
+  因此升级或Cookie 异常后无需重新登录，刷新页面即可恢复
+
+> 注意：`mb_csrf` 一旦被误加 `HttpOnly`，前端将读不到令牌，所有写操作都会返回
+> 403「缺少 CSRF 令牌，请刷新页面后重试」。修改 Cookie 下发逻辑时务必保持该Cookie 可被 JS 读取。
 
 ```bash
 # 登录并保存 Cookie

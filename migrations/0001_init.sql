@@ -219,7 +219,9 @@ CREATE TABLE menus (
   sort_order  INTEGER NOT NULL DEFAULT 0,
   is_visible  INTEGER NOT NULL DEFAULT 1,
   is_external INTEGER NOT NULL DEFAULT 0,
-  open_in_new INTEGER NOT NULL DEFAULT 1,
+  -- 默认不在新窗口打开：站内栏目走页面内路由，跳出新标签页属于反直觉行为。
+  -- 仅站外链接才应显式开启。
+  open_in_new INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
   updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
 );

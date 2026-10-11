@@ -37,8 +37,10 @@ menus = [('首页','/','header',1),('文章','/posts','header',2),('归档','/ar
 con.execute('DELETE FROM menus')
 for label, href, loc, so in menus:
     ext = 1 if href.startswith('http') else 0
+    # 仅站外链接在新窗口打开；站内栏目走页面内路由
+    new_tab = 1 if ext else 0
     con.execute("""INSERT INTO menus (label,href,location,sort_order,is_visible,is_external,open_in_new,created_at,updated_at)
-                    VALUES (?,?,?,?,1,?,1,datetime('now'),datetime('now'))""", (label, href, loc, so, ext))
+                    VALUES (?,?,?,?,1,?,?,datetime('now'),datetime('now'))""", (label, href, loc, so, ext, new_tab))
 
 # ---------- 分类与标签 ----------
 con.execute("INSERT OR IGNORE INTO categories (name,slug,description,sort_order,created_at,updated_at) VALUES (?,?,?,1,datetime('now'),datetime('now'))", ('技术笔记','tech','技术相关的文章与笔记'))

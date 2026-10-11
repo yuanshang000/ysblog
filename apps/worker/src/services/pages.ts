@@ -51,6 +51,48 @@ export function icon(name: keyof typeof ICONS): string {
   return ICONS[name];
 }
 
+/**
+ * 判断菜单项是否为「站内链接」。
+ *
+ * 只有站内链接才走页面内路由（客户端拦截 +局部替换），因此这里必须准确：
+ * - 空链接、锚点、相对路径均视为站内；
+ * - http/https 且 host 与站点同源时也视为站内；
+ * - 其余（http:// 其它域名、mailto:、tel: 等）一律视为站外。
+ */
+function isInternalHref(href: string, siteUrl: string): boolean {
+  const h = (href ?? '').trim();
+  if (!h) return false;
+  if (h.startsWith('#') || h.startsWith('/')) return true;
+  // 带协议前缀但不是 http/https（mailto:、tel:、ftp: 等）一律视为站外，
+  // 不能落入「非 http 开头即站内」的分支，否则会被错误地交给客户端路由。
+  if (/^[a-z][a-z0-9+.-]*:/i.test(h)) {
+    if (!/^https?:\/\//i.test(h)) return false;
+    try {
+      return new URL(h).host === new URL(siteUrl).host;
+    } catch {
+      return false;
+    }
+  }
+  // 无协议的相对路径一律视为站内
+  return true;
+}
+
+/**
+ * 渲染单个导航链接。
+ *
+ * 站内链接：不做target 限制，交由客户端路由做页面内跳转。
+ * 站外链接：仅当显式开启「新窗口」时才加 target="_blank"，
+ * 避免出现「点了本页栏目却开出新标签页」的割裂体验。
+ */
+function navLink(m: MenuItem, currentPath: string, siteUrl: string): string {
+  const active = currentPath === m.href || (m.href !== '/' && currentPath.startsWith(m.href));
+  const internal = isInternalHref(m.href, siteUrl);
+  const target = !internal && m.openInNew ? ' target="_blank" rel="noopener noreferrer"' : '';
+  const route = internal && !m.href.startsWith('#') ? ' data-route-link' : '';
+  const current = active ? ' aria-current="page"' : '';
+  return `<a href="${escapeHtml(m.href)}"${target}${route}${current}>${escapeHtml(m.label)}</a>`;
+}
+
 /** 页头（导航 + 主题切换 + 搜索 + 移动端抽屉） */
 export function renderHeader(
   settings: SiteSettings,
@@ -63,21 +105,10 @@ export function renderHeader(
         { id: 0, label: '首页', href: '/', location: 'header' as const, sortOrder: 0, isVisible: true, isExternal: false, openInNew: false }
       ];
 
-  const navItems = links
-    .map((m) => {
-      const active = currentPath === m.href || (m.href !== '/' && currentPath.startsWith(m.href));
-      const target = m.openInNew ? ' target="_blank" rel="noopener noreferrer"' : '';
-      return `<a href="${escapeHtml(m.href)}"${target}${active ? ' aria-current="page"' : ''}>${escapeHtml(m.label)}</a>`;
-    })
-    .join('');
+  const siteUrl = settings.siteUrl ?? '';
+  const navItems = links.map((m) => navLink(m, currentPath, siteUrl)).join('');
 
-  const drawerItems = links
-    .map((m) => {
-      const active = currentPath === m.href || (m.href !== '/' && currentPath.startsWith(m.href));
-      const target = m.openInNew ? ' target="_blank" rel="noopener noreferrer"' : '';
-      return `<a href="${escapeHtml(m.href)}"${target}${active ? ' aria-current="page"' : ''}>${escapeHtml(m.label)}</a>`;
-    })
-    .join('');
+  const drawerItems = links.map((m) => navLink(m, currentPath, siteUrl)).join('');
 
   const logo = settings.logoUrl
     ? `<img src="${escapeHtml(settings.logoUrl)}" alt="${escapeHtml(settings.siteName)}">`
@@ -104,7 +135,7 @@ export function renderHeader(
 export function renderFooter(settings: SiteSettings, menus: MenuItem[], socials: MenuItem[]): string {
   const year = new Date().getUTCFullYear();
   const footerLinks = menus
-    .map((m) => `<a href="${escapeHtml(m.href)}"${m.openInNew ? ' target="_blank" rel="noopener noreferrer"' : ''}>${escapeHtml(m.label)}</a>`)
+    .map((m) => navLink(m, '', settings.siteUrl ?? ''))
     .join('');
 
   const socialHtml = socials.length
