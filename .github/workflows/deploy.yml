@@ -53,30 +53,14 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       # ---- 基础设施准备（幂等：已存在则跳过）----
-      # R2 桶不存在才创建。已存在时 wrangler 会报错，用 || true 兜底。
+      # R2 桶不存在才创建。解析逻辑放在 scripts/ensure-r2.sh：
+      # wrangler 各版本输出格式不同（键值文本 vs 表格），内联脚本难以兼容，
+      # 且脚本可本地实测。
       - name: 确认 R2 存储桶存在
         run: |
           set -euo pipefail
-          # 精确匹配桶名。用表格解析而非 grep 子串：
-          # myblog-media-staging 会被 grep "myblog-media" 误判为已存在。
-          if npx wrangler r2 bucket list 2>/dev/null | node -e '
-            const target = "myblog-media";
-            let buf = "";
-            process.stdin.on("data", d => buf += d);
-            process.stdin.on("end", () => {
-              for (const raw of buf.split(/\r?\n/)) {
-                const line = raw.trim();
-                if (!line.startsWith("│")) continue;
-                const name = line.replace(/^│/, "").replace(/│$/, "").split("│")[0].trim();
-                if (name === target) { console.log("FOUND"); return; }
-              }
-            });
-          ' | grep -q FOUND; then
-            echo "R2 桶 myblog-media 已存在，跳过创建"
-          else
-            echo "创建 R2 桶 myblog-media…"
-            npx wrangler r2 bucket create myblog-media
-          fi
+          chmod +x scripts/ensure-r2.sh
+          ./scripts/ensure-r2.sh myblog-media
 
       # D1 必须先创建才能拿到 database_id。
       # 用独立脚本而非内联 JSON 解析 —— wrangler 各版本 d1 list --json 的字段名不一致，

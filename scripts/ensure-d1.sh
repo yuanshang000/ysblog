@@ -35,13 +35,17 @@ find_existing_id() {
       for (const raw of buf.split(/\r?\n/)) {
         const line = raw.trim();
         if (!line.startsWith("│")) continue;
-        const cols = line.replace(/^│/, "").replace(/│$/, "").split("│").map(s => s.trim());
+        const cols = line.replace(/^│/, "").replace(/│$/, "").split("│").map(s => s.trim()).filter(s => s !== "");
         if (cols.length < 2) continue;
-        const name = cols[0];
+        // 不假设列顺序：uuid 可能是第 1 列也可能是第 2 列，
+        // 因此在所有列里找 uuid，再在剩余列里找库名。
+        const idMatch = cols.map(c => c.match(pattern)).find(Boolean);
+        if (!idMatch) continue;
+        const name = cols.find(c => c !== idMatch[0]);
         // 精确相等，避免 myblog 匹配到 myblog-staging
         if (name !== target) continue;
-        const m = cols[1].match(pattern);
-        if (m) { console.log(m[0]); return; }
+        console.log(idMatch[0]);
+        return;
       }
     });
   ' "$DB_NAME"
