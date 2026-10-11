@@ -87,7 +87,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | 前台 SSR | 文章内容由 Worker 服务端渲染成 HTML，搜索引擎与禁用 JS 的场景都能完整阅读 |
-| 页面内路由 | 站内导航拦截后仅替换主体内容，同步标题与地址栏；失败自动回退整页跳转，禁用 JS 时行为不变 |
+| 页面内路由 | 站内导航拦截后仅替换主体内容，同步标题与地址栏，支持前进后退；失败自动回退整页跳转，禁用 JS 时行为不变 |
 | 极简写作 | 三栏编辑器、1.5 秒防抖自动保存、本地草稿兜底、多标签页冲突检测 |
 | Markdown | 安全渲染（原始 HTML 一律转义），支持代码高亮、表格、数学公式、目录锚点、图片灯箱 |
 | 深色模式 | 浅色 / 深色 / 跟随系统，无闪烁；深色为独立配色而非反色 |
@@ -140,6 +140,14 @@ API       Cloudflare Workers + TypeScript
 >
 > 账号级权限可在 <https://dash.cloudflare.com/profile/api-tokens> 创建。
 
+> **常见坑：报「it's necessary to set a CLOUDFLARE_API_TOKEN environment variable」**
+>
+> 这**不是**权限不足，而是凭据没传到运行 `wrangler` 的步骤里。
+> `cloudflare/wrangler-action` 只用它自己的输入完成登录，不会把这两个变量
+> 导出为后续 `run` 步骤的环境变量；而本工作流后续步骤都是直接 `npx wrangler ...`。
+> 工作流中的「导出 Cloudflare 环境变量」步骤负责把 secrets 写入 `$GITHUB_ENV`，
+> 自行精简工作流时请保留它。
+
 **第 3 步：推送触发**
 
 ```bash
@@ -149,6 +157,9 @@ git push origin main
 或直接在 Actions 页面点击 `Run workflow` 手动触发。
 
 流水线会依次完成：类型检查 → 单元测试 → 构建资源 → 自动创建 R2 桶与 D1 库 → 回填 `database_id` → 执行迁移 → 部署。任一步失败即中止。
+
+> 数据库迁移失败时，流水线会把 wrangler 的原始报错逐行写入 Actions 的错误注记，
+> 无需打开完整日志即可看到失败原因。
 
 ---
 
@@ -338,6 +349,13 @@ my-blog/
 - 后台 SPA 全部路由可访问
 - 98 个单元测试通过
 - Worker 与后台类型检查零错误
+
+安全与部署链路的专项验证：
+
+- CSRF 双提交实测：登录后 `mb_csrf` 不带 `HttpOnly`（前端可读），`mb_session` 仍带；
+  缺失令牌返回 403，携带令牌改密码返回 200
+- 页面内路由实测：线上导航 8 个栏目，`target="_blank"` 数量为 0，全部标记为路由链接
+- GitHub Actions 端到端跑通：推送后自动完成检查、构建、迁移与部署
 
 ---
 
