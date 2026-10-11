@@ -65,4 +65,43 @@ describe('SQLite → Postgres 方言转换', () => {
     const sql = "SELECT * FROM t WHERE name LIKE '%' || ? || '%'";
     expect(rewriteSql(sql)).toBe("SELECT * FROM t WHERE name LIKE '%' || $1 || '%'");
   });
+
+  // 以下两组为线上 500（operator does not exist: text = date）的回归用例。
+  // 该报错使后台「仪表盘」接口完全不可用。
+
+  it("date('now') 返回 TEXT，与 date(col) 的结果类型一致", () => {
+    const out = rewriteSql("SELECT COUNT(*) FROM page_views WHERE date(created_at) = date('now')");
+    expect(out).toBe(
+      "SELECT COUNT(*) FROM page_views WHERE TO_CHAR(created_at, 'YYYY-MM-DD') = TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')"
+    );
+    // 两边都必须是 TO_CHAR，否则一边 TEXT 一边 date 会导致运算符不存在
+    const matches = out.match(/TO_CHAR\(/g);
+    expect(matches).toHaveLength(2);
+  });
+
+  it("date('now', ?) 带偏移时返回 date 类型，可与 timestamp 列比较", () => {
+    const out = rewriteSql("SELECT * FROM page_views WHERE created_at >= date('now', ?)");
+    // 必须是 date 而非 TEXT，否则 timestamp >= text 会报运算符不存在
+    expect(out).toContain('::date');
+    expect(out).toContain('CAST($1 AS INTERVAL)');
+    // 绑定值已含单位（'-7 days'），不能再次拼接
+    expect(out).not.toContain("' days'");
+  });
+
+  it("datetime('now', ?) 带偏移时同样交给 interval 解析", () => {
+    const out = rewriteSql("DELETE FROM page_views WHERE created_at <= datetime('now', ?)");
+    expect(out).toContain('CAST($1 AS INTERVAL)');
+    // 重复拼接单位会得到 '-7 days days'，Postgres 直接报错
+    expect(out).not.toContain("' days'");
+  });
+
+  it('仪表盘统计 SQL 改写后不含裸 date() 调用', () => {
+    const sql =
+      'SELECT date(created_at) AS date, COUNT(*) AS views FROM page_views ' +
+      "WHERE is_bot = 0 AND created_at >= date('now', ?) GROUP BY date(created_at) ORDER BY date ASC";
+    const out = rewriteSql(sql);
+    // Postgres 没有 date() 函数，残留即报错
+    expect(out).not.toMatch(/\bdate\(/i);
+    expect(out).toContain('TO_CHAR');
+  });
 });

@@ -79,6 +79,13 @@ export function rewriteSql(sql: string): string {
     return `NOW() ${sign} INTERVAL '${m[2]} ${m[3].toLowerCase()}${m[2] === '1' ? '' : 's'}'`;
   });
 
+  // datetime('now', ?) —— 偏移量由调用方绑定，形如 '-7 days'（已含单位）。
+  // 这里直接交给 interval 解析，不要再拼接单位，否则会得到 '-7 days days'。
+  s = s.replace(
+    /datetime\(\s*'now'\s*,\s*(\?)\s*\)/gi,
+    '(NOW() + CAST($1 AS INTERVAL))'
+  );
+
   // datetime('now','localtime') 等变体
   s = s.replace(/datetime\(\s*'now'\s*,\s*'localtime'\s*\)/gi, 'NOW()');
 
@@ -94,14 +101,25 @@ export function rewriteSql(sql: string): string {
     (_m, expr) => `TO_CHAR(${expr.trim()}, 'YYYY-MM-DD')`
   );
 
-  // date('now', ?) 与 date(expr)：SQLite 的 date() 在 Postgres 中对应 TO_CHAR + CAST
-  // 参数形式 date('now', ?) 由调用方绑定 '-N days' 之类的偏移量，
-  // 这里转成 CURRENT_DATE + 偏移的 interval 表达式。
+  // date() 系列改写。
+  //
+  // SQLite 的 date() 永远返回 TEXT（'YYYY-MM-DD'），Postgres 没有 date() 函数。
+  // 改写时必须让表达式的结果类型与「比较的另一侧」一致，否则会报
+  // operator does not exist（text = date / timestamp >= text）。
+  // 本项目里date() 只出现在两种比较场景，各自需要不同类型：
+  //
+  // 1) date(col) = date('now')——两边都是「格式化后的日期字符串」。
+  //    date(col) → TO_CHAR(col, 'YYYY-MM-DD')（TEXT）
+  //    date('now') 也返回 TEXT，保证 text = text 可比较。
+  // 2) col >= date('now', ?)——左边是 timestamp 列。
+  //    此时必须返回真正的 date 类型（而非 TEXT），Postgres 才能比较。
+  //    绑定值形如 '-7 days'（已含单位），直接交给 interval 解析，
+  //    不要在此拼接单位，否则会变成 '-7 days days'。
+  s = s.replace(/date\(\s*'now'\s*\)/gi, "TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')");
   s = s.replace(
     /date\(\s*'now'\s*,\s*(\?)\s*\)/gi,
-    "TO_CHAR(CURRENT_DATE + CAST(($1 || ' days') AS INTERVAL), 'YYYY-MM-DD')"
+    "(CURRENT_DATE + CAST($1 AS INTERVAL))::date"
   );
-  // date(expr) → TO_CHAR(expr, ...)
   s = s.replace(/\bdate\(\s*([^'"][^)]*?)\s*\)/gi, (_m, expr) => `TO_CHAR(${expr.trim()}, 'YYYY-MM-DD')`);
 
   // GROUP BY / ORDER BY 里常见的 SQLite 别名写法在 Postgres 中同样可用，无需处理。
