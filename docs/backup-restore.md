@@ -1,160 +1,137 @@
 # 数据备份与恢复
 
-> ⚠️ **GitHub 代码仓库不是数据库备份。** 文章和图片保存在 D1 与 R2，必须单独导出。
+> ⚠️ **GitHub 代码仓库不是数据库备份。** 文章和图片保存在 Postgres 与 Vercel Blob，必须单独导出。
 
 ---
 
-## 需要备份什么
+## 备份什么
 
 | 内容 | 位置 | 丢失后果 |
 | --- | --- | --- |
-| 文章、页面、分类、标签、评论、设置 | D1 数据库 | **全部内容永久丢失** |
-| 封面、正文图片、头像 | R2 存储桶 | 文章出现大量坏图 |
-| 部署配置 | `wrangler.jsonc`（已含在 GitHub） | 需重新配置 |
-
-> 数据库与图片**必须成对保存**，否则恢复后文章会引用到不存在的图片。
+| 文章、页面、分类、标签、评论、设置 | Postgres 数据库 | **全部内容永久丢失** |
+| 封面、正文图片、头像 | Vercel Blob | 文章出现大量坏图 |
+| 环境变量（密钥） | Vercel 控制台 | 需重新生成 |
 
 ---
 
-## 备份
+## 完整备份
 
-### 一条命令完成
+### 1. 数据库导出
+
+在项目页的 Vercel **Terminal** 中执行（需安装 `pg_dump`）：
 
 ```bash
-# 备份线上生产库
-npm run db:backup -- --remote
+# 导出为 SQL 文件
+pg_dump "$POSTGRES_URL" --clean --no-owner > ./backup-$(date +%Y%m%d-%H%M%S).sql
+```
 
-# 备份本地开发库
+或使用 Node 脚本（无需额外工具）：
+
+```bash
 npm run db:backup
 ```
 
-输出结构：
+该脚本会把数据库导出到 `backups/<时间戳>/database.sql`。
 
-```
-backups/2026-10-09T18-30-00/
-├── database.sql        # D1 完整导出
-├── media/              # R2 图片（按对象键目录结构）
-└── backup-meta.json    # 备份元信息
-```
+### 2. 图片导出
 
-### 手动执行
+Vercel Blob 的图片需要单独处理。逐个下载 `media` 表中记录的 `object_key`：
 
 ```bash
-# 1. 导出数据库
-npx wrangler d1 export myblog --remote --output ./backups/database.sql
+# 导出 media 表拿到所有 object_key
+psql "$POSTGRES_URL" -c "SELECT object_key FROM media" -t -A > keys.txt
 
-# 2. 同步图片
-npx wrangler r2 object sync myblog-media ./backups/media
+# 逐个下载
+mkdir -p media
+while read -r key; do
+  curl -sL "https://<你的blob域名>/$key" -o "media/$key"
+done < keys.txt
 ```
 
-### 建议频率
+> 更稳妥的做法是给 Blob 配置自定义域名后再下载，避免公开 URL 形式变化导致失效。
 
-| 场景 | 操作 |
+### 3. 打包
+
+```bash
+tar czf backup-$(date +%Y%m%d-%H%M%S).tar.gz backup-*.sql media/
+```
+
+---
+
+## 什么时候需要备份
+
+| 时机 | 原因 |
 | --- | --- |
-| 发布重要文章后 | 立即导出一次数据库 |
-| 每周 | 数据库 + 图片完整备份 |
-| 每次修改站点设置前 | 导出一次（设置存 D1） |
-| 至少保留 | **3 份**历史备份，异地存放（本地 + 云盘） |
-
-### 自动化（GitHub Actions）
-
-可选：在 `.github/workflows/backup.yml` 中配置每日定时导出并上传到对象存储。注意：**备份文件不要提交进 Git 仓库**。
+| 升级数据库 schema 前 | 迁移脚本可能不兼容旧数据 |
+| 修改站点设置前 | 设置存于数据库 |
+| 大批量导入/删除文章前 | 误操作可回滚 |
+| 迁移平台前 | 跨平台数据格式会变 |
 
 ---
 
 ## 恢复
 
-### 完整恢复流程
-
-> ⚠️ 恢复会**覆盖当前数据**。执行前务必先给当前数据做一次备份。
+### 恢复数据库
 
 ```bash
-# 0. 先备份当前状态（以防万一）
-npx wrangler d1 export myblog --remote --output ./backups/before-restore.sql
-
-# 1. 恢复数据库
-npx wrangler d1 execute myblog --remote --file=./backups/2026-10-09T18-30-00/database.sql
-
-# 2. 恢复图片
-npx wrangler r2 object sync ./backups/2026-10-09T18-30-00/media myblog-media
-
-# 3. 验证
-#    - 打开前台，确认文章可读
-#    - 打开文章详情，确认图片正常显示
-#    - 打开后台，确认分类/标签/设置都在
+psql "$POSTGRES_URL" < ./backup-20261011-120000.sql
 ```
 
-### 只恢复图片
-
-文章还在但图片全丢（通常是误删了 R2 桶）：
+若报「表已存在」，加 `--clean`：
 
 ```bash
-npx wrangler r2 object sync ./backups/2026-10-09T18-30-00/media myblog-media
+psql "$POSTGRES_URL" --clean --if-exists < ./backup-20261011-120000.sql
 ```
 
-因为对象键保存在 D1 的 `media.object_key` 中，只要键不变，文章里的图片链接就会自动恢复。
+### 恢复图片
 
-### 只恢复数据库
-
-图片还在但文章丢了：
+确保 `media` 表中的 `object_key` 与恢复的目录结构一致。只要键不变，文章里的图片链接会自动恢复。
 
 ```bash
-npx wrangler d1 execute myblog --remote --file=./backups/2026-10-09T18-30-00/database.sql
-```
-
-> ⚠️ 恢复数据库会覆盖当前的 `media` 表记录。若期间上传过新图片，
-> 旧备份中的 media 记录不会包含它们，但**文件本身仍在 R2**。
-> 恢复后需在后台媒体库重新上传这些新图片，或手动补一条 media 记录。
-
----
-
-## 灾难恢复（新环境重建）
-
-如果整个 Cloudflare 账号或项目都没了：
-
-```bash
-# 1. 从 GitHub 克隆代码
-git clone https://github.com/<你的用户名>/my-blog.git
-cd my-blog && npm install
-
-# 2. 创建新资源
-npx wrangler d1 create myblog
-npx wrangler r2 bucket create myblog-media
-
-# 3. 把新的 database_id 填入 wrangler.jsonc
-
-# 4. 恢复数据
-npx wrangler d1 execute myblog --remote --file=./backups/<时间戳>/database.sql
-npx wrangler r2 object sync ./backups/<时间戳>/media myblog-media
-
-# 5. 重新设置密钥
-npx wrangler secret put SESSION_SECRET
-npx wrangler secret put IP_HASH_SALT
-
-# 6. 构建部署
-npm run build
-npx wrangler deploy
-
-# 7. 重新绑定域名（在 Cloudflare 控制台操作）
+# 恢复后验证
+psql "$POSTGRES_URL" -c "SELECT COUNT(*) FROM media"
 ```
 
 ---
 
-## 已验证事项
+## 灾难恢复
 
-以下流程在本项目的开发过程中**实际执行验证过**：
+如果 Postgres 或整个 Vercel 项目都没了：
 
-- ✅ `wrangler d1 migrations apply` 在真实 D1 上执行成功（55 条语句）
-- ✅ `wrangler d1 execute` 导入导出 SQL 可用
-- ✅ R2 对象上传后可通过 `/media/<key>` 正常读取，字节完全一致
-- ✅ 媒体表 `object_key` 与公开 URL 分离存储，因此更换域名不影响已有图片
+```bash
+# 1. 在 Vercel 控制台重新创建 Postgres 与 Blob
+#    Storage → Create Database / Create Store
+
+# 2. 拉取新的环境变量
+vercel env pull .env.local
+
+# 3. 建表
+npm run db:migrate
+
+# 4. 导入备份数据
+psql "$POSTGRES_URL" < ./backup/<时间戳>/database.sql
+
+# 5. 上传图片文件到 Blob（需重新上传，Blob 不支持批量目录同步）
+```
+
+然后在 Vercel 控制台重新配置 `SESSION_SECRET`、`IP_HASH_SALT` 等环境变量并重新部署。
+
+---
+
+## 定期检查
+
+建议每季度做一次恢复演练：
+
+1. 新建一个测试数据库
+2. 导入一份备份
+3. 验证文章数、图片数与生产一致
+
+**备份文件存在 ≠ 能恢复。** 演练才能发现备份损坏或格式过时的问题。
 
 ---
 
 ## 注意事项
 
-- **定期做恢复演练**：备份文件存在 ≠ 能恢复。建议每季度挑一份备份，在临时 D1 库上试恢复一次。
-- **不要把 SQL 提交进 Git**：里面包含用户密码哈希（PBKDF2，虽不可逆但不应泄露）。
-- **异地存放**：本机 + 云盘各一份。本机损坏时云盘仍可救。
-- **图片较大时优先只备份数据库** + 定期同步图片，避免备份体积失控。
-- 迁移脚本全部是增量且向后兼容的，代码回滚不会导致数据库不可用 —— 但数据回滚仍需依赖上述备份。
+- 备份文件**包含用户数据与 IP 哈希**，不要提交到 Git 仓库（`.gitignore` 已忽略 `backups/`）
+- 备份本身也可能包含敏感信息，建议加密后再上传到云盘
+- Postgres 免费额度足够个人博客，但要注意存储上限并定期清理历史备份

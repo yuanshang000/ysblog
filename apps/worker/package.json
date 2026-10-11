@@ -5,17 +5,17 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "db:migrate:local": "wrangler d1 migrations apply myblog --local",
-    "db:migrate:remote": "wrangler d1 migrations apply myblog --remote"
+    "dev": "vercel dev",
+    "deploy": "vercel deploy --prod"
   },
   "dependencies": {
     "@myblog/shared": "*",
-    "markdown-it": "^14.1.0"
+    "@vercel/blob": "^2.8.1",
+    "markdown-it": "^14.1.0",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241218.0",
-    "wrangler": "^3.99.0"
+    "@types/pg": "^8.23.1",
+    "vercel": "^41.0.0"
   }
 }

@@ -1,14 +1,21 @@
 /**
- * Cloudflare Worker 入口。
+ * 应用入口 —— Vercel Functions（Node.js运行时）。
  *
  * 路由优先级：
  *   /api/v1/*        REST API（公开 + 管理）
- *   /admin/*         后台 SPA 静态资源
- *   /assets/*        前台构建产物（islands 脚本与静态资源）
- *   /media/*         R2 文件
+ *   /admin/*后台 SPA（静态资源由 CDN 直出，未命中回退到入口 HTML）
+ *   /media/*         Vercel Blob 文件
  *   其他             前台 SSR HTML
+ *
+ * 平台差异（相对原先的 Cloudflare Workers）：
+ * - 绑定（env.DB / env.BUCKET）改为从 process.env 组装，见 buildEnv()
+ * - ExecutionContext 的 waitUntil 在 Vercel 上不存在，
+ *   异步任务改为「不阻塞响应地静默执行」
+ * - 定时任务由 /api/cron 端点 + Vercel Cron 触发，而非 export.scheduled
  */
 import type { Env } from './lib/env';
+import { createDb } from './lib/db-adapter';
+import { createBlobStore } from './lib/blob-store';
 import { createCtx, type Ctx } from './lib/context';
 import { assertCsrf, loadSession } from './lib/auth';
 import { handleError, jsonError, jsonOk, HttpError } from './lib/http';
@@ -689,10 +696,64 @@ const ISLAND_SCRIPTS = [`/islands/app.js?b=${BUILD_ID}`];
 
 // ============ 入口 ============
 
-export default {
-  async fetch(request: Request, env: Env, ctxObj: ExecutionContext): Promise<Response> {
-    const ctx = await createCtx(request, env, {}, (p) => ctxObj.waitUntil(p));
-    const url = ctx.url;
+/**
+ * 从 process.env 组装出业务所需的 Env。
+ *
+ * Cloudflare 的绑定是平台注入的，Vercel 上则全部来自环境变量，
+ * 因此这里集中做一次映射，业务代码继续使用统一的 env.X 访问方式。
+ */
+let cachedEnv: Env | null = null;
+function buildEnv(): Env {
+  if (cachedEnv) return cachedEnv;
+  cachedEnv = {
+    DB: createDb(),
+    BUCKET: createBlobStore(),
+    SITE_URL: process.env.SITE_URL,
+    ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
+    SESSION_SECRET: process.env.SESSION_SECRET,
+    IP_HASH_SALT: process.env.IP_HASH_SALT,
+    ADMIN_SETUP_TOKEN: process.env.ADMIN_SETUP_TOKEN,
+    MAX_UPLOAD_MB: process.env.MAX_UPLOAD_MB,
+    ALLOW_SVG: process.env.ALLOW_SVG,
+    ENVIRONMENT: process.env.ENVIRONMENT ?? 'production'
+  };
+  return cachedEnv;
+}
+
+/**
+ * 读取后台 SPA 的入口 HTML。
+ *
+ * Vercel 上 public/ 目录由CDN 直接托管，但 SPA 的客户端路由
+ * （如 /admin/posts/1）需要一个入口文件兜底。这里在运行时读取并缓存。
+ */
+let adminShellCache: string | null = null;
+async function readAdminShell(): Promise<string | null> {
+  if (adminShellCache) return adminShellCache;
+  for (const p of ['admin/index.html', 'admin/app.htm', './admin/index.html']) {
+    try {
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      const file = path.join(process.cwd(), 'public', p);
+      const html = await fs.readFile(file, 'utf-8');
+      if (html) {
+        adminShellCache = html;
+        return html;
+      }
+    } catch {
+      // 尝试下一个候选路径
+    }
+  }
+  return null;
+}
+
+/** Vercel Functions 入口 */
+export default async function handler(request: Request): Promise<Response> {
+  const env = buildEnv();
+  // Vercel 没有 ExecutionContext，用「即发即弃」的异步执行替代 waitUntil
+  const ctx = await createCtx(request, env, {}, (p) => {
+    void Promise.resolve(p).catch((e) => console.error('[waitUntil]', e));
+  });
+  const url = ctx.url;
 
     try {
       // 首次访问时初始化默认设置与导航菜单。
@@ -713,41 +774,29 @@ export default {
         return mergeHeaders(res, ctx.setCookies, securityHeaders);
       }
 
-      // ---- R2 媒体 ----
+      // ---- 媒体（Vercel Blob）----
       if (url.pathname.startsWith('/media/')) {
         const key = decodeURIComponent(url.pathname.slice('/media/'.length));
         if (!key || key.includes('..')) return new Response('Bad Request', { status: 400 });
         const object = await env.BUCKET.get(key);
         if (!object) return new Response('Not Found', { status: 404 });
         const headers = new Headers();
-        object.writeHttpMetadata(headers);
+        const ct = object.httpMetadata?.contentType;
+        if (ct) headers.set('Content-Type', ct);
         headers.set('Cache-Control', 'public, max-age=31536000, immutable');
-        headers.set('ETag', object.httpEtag);
         headers.set('Access-Control-Allow-Origin', '*');
+        headers.set('Content-Length', String(object.size));
         if (request.method === 'HEAD') return new Response(null, { headers });
         return new Response(object.body, { headers });
       }
 
       // ---- 后台 SPA ----
-// run_worker_first 模式下所有请求先进 Worker，静态文件由env.ASSETS.fetch 读取。
-// 关键：读取时必须用「不带原 query 的干净路径」，否则 index.html?b=v2 这类
-// 带查询串的请求在本地模拟器上会命中不到文件而返回空。
-if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
-        // 真实的静态资源（JS/CSS）原样透传
-        if (url.pathname.startsWith('/admin/assets/')) {
-          return env.ASSETS.fetch(new Request(new URL(url.pathname, url), request));
-        }
-
-        // 页面路由统一回退到后台入口 HTML。
-        // 用 app.htm 而非 index.html：wrangler 本地模拟器对 .html 请求读不到内容，
-        // .htm 扩展名可正常读取（构建时已自动复制，见 apps/admin/vite.config.ts）。
-        const assetUrl = new URL('/admin/app.htm', url);
-        assetUrl.search = '';
-        const indexRes = await env.ASSETS.fetch(new Request(assetUrl.toString(), request));
-        const html = await indexRes.text();
+      // Vercel 上静态资源由 CDN 直接处理，未命中的路径回退到后台入口 HTML。
+      if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+        const html = await readAdminShell();
         if (!html) {
           return new Response(
-            '管理后台资源未找到，请先运行 npm run build:admin 生成 apps/worker/public/admin',
+            '管理后台资源未找到，请先运行 npm run build:admin 生成 public/admin',
             { status: 500, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
           );
         }
@@ -761,12 +810,6 @@ if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
             'Referrer-Policy': 'strict-origin-when-cross-origin'
           }
         });
-      }
-
-      // ---- 前台静态资源 ----
-      if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/islands/')) {
-        const res = await env.ASSETS.fetch(request);
-        if (res.status < 400) return res;
       }
 
       // ---- URL 重定向规则 ----
@@ -814,12 +857,38 @@ if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
         return new Response('Internal Server Error', { status: 500 });
       }
     }
-  },
+}
 
-  async scheduled(event: ScheduledController, env: Env, ctxObj: ExecutionContext): Promise<void> {
-    ctxObj.waitUntil(runScheduledJobs(env));
+/**
+ * 定时任务入口 —— 由 Vercel Cron 触发（vercel.json 中的 crons 配置）。
+ *
+ * Cloudflare 用 export.scheduled，Vercel 只能走 HTTP 端点。
+ * 安全：Vercel Cron 会自动带上 `Authorization: Bearer <CRON_SECRET>`，
+ * 这里做校验，避免被外部随意触发。
+ */
+export async function cronHandler(request: Request): Promise<Response> {
+  const env = buildEnv();
+  const auth = request.headers.get('authorization');
+  const secret = process.env.CRON_SECRET;
+
+  // 未配置 CRON_SECRET 时放行（Hobby 计划不强制要求），
+  // 但仅允许来自 Vercel Cron 的 User-Agent，便于排查。
+  if (secret) {
+    if (auth !== `Bearer ${secret}`) {
+      return jsonError(401, '未授权的定时任务请求');
+    }
+  } else if (!/vercel-cron/i.test(request.headers.get('user-agent') ?? '')) {
+    return jsonError(401, '未授权的定时任务请求');
   }
-};
+
+  try {
+    await runScheduledJobs(env);
+    return jsonOk({ ok: true }, 200, '定时任务执行完成');
+  } catch (err) {
+    console.error('[cron] 执行失败', err);
+    return jsonError(500, err instanceof Error ? err.message : '定时任务执行失败');
+  }
+}
 
 /** 记录访问统计 */
 async function recordVisit(env: Env, ctx: Ctx, res: Response): Promise<void> {

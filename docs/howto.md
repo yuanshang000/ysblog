@@ -6,7 +6,7 @@
 
 # 一、更新代码后如何部署
 
-## 场景 A：改了代码（改Worker / 前台 / 后台）
+## 场景 A：改了代码（改 Worker / 前台 / 后台）
 
 ### 方式 1：推送触发自动部署（推荐）
 
@@ -16,22 +16,12 @@ git commit -m "feat: 你的改动说明"
 git push origin master
 ```
 
-推完GitHub Actions 自动跑完这 5 步，约 2-3 分钟：
+Vercel 会自动完成：安装依赖 → 构建前台+后台 → 部署。约 2-3 分钟。
 
-| 步骤 | 做什么 | 失败后果 |
-|---|---|---|
-| npm ci | 按 lock 装依赖 | 中止（不会部署半成品） |
-| typecheck | Worker tsc + 后台 vue-tsc | 中止 |
-| 单元测试 | vitest run | 中止 |
-| build:ci | 构建前台+后台+校验产物 | 中止 |
-| 迁移 → 部署 | D1 迁移 + wrangler deploy | 中止 |
-
-在仓库 Actions 页面看进度。
-
-**推送前建议先本地跑一遍**，避免白等 CI：
+**推送前建议先本地跑一遍**，避免把编译错误推到线上：
 
 ```bash
-npm run typecheck&& npm test && npm run build:ci
+npm run typecheck && npm test && npm run build
 ```
 
 ### 方式 2：本地直接部署（不想等 CI）
@@ -40,61 +30,52 @@ npm run typecheck&& npm test && npm run build:ci
 npm run deploy
 ```
 
-等于 `npm run build && wrangler deploy`，约 40 秒。
-
 改完数据库表结构（新增 migration）时，**必须**先迁移再部署：
 
 ```bash
-npm run db:migrate:remote   # 应用到生产库
+npm run db:migrate
 npm run deploy
 ```
 
 ### 方式 3：只改文章内容 —— 不需要重新部署
 
-文章存在 D1 里，不在代码里。**用后台编辑器改，或用下面的导入工具**，都无需重新部署。
+文章存在数据库里，不在代码里。**用后台编辑器改，或用下面的导入工具**，都无需重新部署。
 
 ---
 
-## 场景 B：新增了 npm 依赖（重要）
+## 场景 B：新增了 npm 依赖
 
-Windows 上装依赖会让 `package-lock.json` 只记录 win32 平台包，
-Cloudflare 的Linux 构建会失败。
+Vercel 在 Linux 环境构建，若 `package-lock.json` 里缺少对应平台的二进制包会构建失败：
 
 ```bash
 npm install xxx
-npm run fix:lock        # 补全所有平台的二进制包
-npm run test:e2e        # 验证 npm ci 能通过
+npm test                      # 确认没破坏现有功能
 git add package.json package-lock.json
 git commit -m "deps: 新增 xxx"
 git push
 ```
 
-**每次新增依赖后都要跑 `npm run fix:lock`**，否则 CI 会报
-`Missing: @esbuild/linux-x64 from lock file`。
+若 CI 报 `Missing: xxx from lock file`，说明 lock 文件不完整，
+可在 Linux 环境或用 WSL 重新执行一次 `npm install` 生成完整 lock。
 
 ---
 
 ## 部署出问题了怎么回滚
 
-```bash
-# 看历史版本
-npx wrangler deployments list
+进入 Vercel 项目的 **Deployments** 页面，找到上一个正常版本，点击右侧的 `⋯` → **Promote to Production**，秒级回滚。
 
-# 回滚到上一个版本（在 Dashboard 的 Deployments 页面点 Rollback 更直观）
-```
-
-Cloudflare Workers 保留最近 10 个版本，回滚是秒级操作，不会丢数据
-（数据在 D1，部署只换代码）。
+> 回滚只更换代码版本，不影响数据库中的数据。
+> 若问题出在数据库（schema 或数据），需要单独处理，代码回滚无法解决。
 
 ---
 
 ## 本地开发
 
 ```bash
-npm run dev# 同时起 Worker(8787) / 前台 / 后台
+npm run dev        # 启动 Vercel 本地运行时（localhost:3000）
 ```
 
-改了 Worker 代码需重启 `npm run dev`；改了前台/后台 vite 会热更新。
+改了 `apps/worker/` 下的代码需重启；前台岛与后台是 Vite watch，会自动热更新。
 
 ---
 
@@ -152,27 +133,26 @@ node scripts/import-markdown.mjs --dir ./我的文章 --dry-run
 
 会打印每篇的标题、slug、字数、标签数量，以及将要执行的 SQL。**不写库。**
 
-### 方式 2：生成本地库 + 确认无误后导生产
+### 方式 2：先生成 SQL，确认无误后导入
 
 ```bash
-# 第一步：导到本地库看看效果
-node scripts/import-markdown.mjs --dir ./我的文章
-npm run dev   # 打开 http://127.0.0.1:8787 看效果
+# 第一步：先生成 SQL 并本地试跑
+node scripts/import-markdown.mjs --dir ./我的文章 --dry-run
 
-# 第二步：确认没问题后导生产
+# 第二步：确认没问题后导入生产库
 node scripts/import-markdown.mjs --dir ./我的文章 --remote --publish
 ```
 
 默认是**草稿**状态。加 `--publish` 直接发布。
 
-### 方式 3：只生成 SQL（受限环境用）
+### 方式 3：只生成 SQL 文件（受限环境用）
 
-某些环境（如 CI 沙箱、容器）禁止 Node 创建子进程，脚本无法直接调wrangler。
+某些环境禁止 Node 创建子进程，脚本无法直接连数据库。
 这时让它只生成 SQL 文件，你手动执行：
 
 ```bash
-node scripts/import-markdown.mjs --dir ./我的文章 --out ./.tmp/import.sql
-npx wrangler d1 execute myblog --remote --file ./.tmp/import.sql
+node scripts/import-markdown.mjs --dir ./我的文章 --out ./import.sql
+psql "$POSTGRES_URL" -f ./import.sql
 ```
 
 ## 常用参数

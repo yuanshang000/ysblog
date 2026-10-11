@@ -1,16 +1,16 @@
 /**
- * Markdown 批量导入 —— 把本地 .md 文件导入到D1（支持远程）。
+ * Markdown 批量导入 —— 把本地 .md 文件导入到 Postgres。
  *
  * 为什么需要：项目原本没有导入功能，只能在后台逐篇粘贴。
  * 本脚本让你把 Markdown 丢进一个文件夹，一条命令批量入库。
  *
  * 用法：
- *   node scripts/import-markdown.mjs --dir ./posts --out ./.tmp/import.sql
- *   npx wrangler d1 execute myblog --remote --file ./.tmp/import.sql
- *
- *   node scripts/import-markdown.mjs --dir ./posts --remote --publish
- *   node scripts/import-markdown.mjs --file ./a.md --remote
  *   node scripts/import-markdown.mjs --dir ./posts --dry-run
+ *   node scripts/import-markdown.mjs --dir ./posts --publish
+ *   node scripts/import-markdown.mjs --file ./a.md
+ *   node scripts/import-markdown.mjs --dir ./posts --out ./import.sql
+ *
+ * 连接串来自环境变量 POSTGRES_URL（或 .env.local）。
  *
  * 前置元数据（写在 Markdown 顶部的 YAML front-matter，可选）：
  *
@@ -26,17 +26,17 @@
  *   ---
  *
  * 安全约定：
- * - 所有写入经 wrangler d1 execute 的 SQL 参数转义，不做字符串拼接执行；
- * - 默认写本地库，加 --remote 才写生产库；
+ * - 所有写入经 SQL 转义后执行，不做字符串拼接执行；
+ * - 整批导入包在事务中，任一语句失败则全部回滚；
  * - slug 冲突时自动追加序号，不覆盖已有文章；
  * - 库中无作者账号时会自动建一个占位账号（密码不可登录），
  *   避免 author_id 外键约束导致整批失败。
  */
+import pg from 'pg';
+const { Pool } = pg;
 
-import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join, basename, extname } from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { readdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { join, basename, extname, resolve } from 'node:path';
 
 // ============ 参数解析 ============
 const argv = process.argv.slice(2);
@@ -48,7 +48,14 @@ function opt(name, fallback = null) {
 
 const DIR = opt('--dir');
 const FILE = opt('--file');
-const REMOTE = flag('--remote');
+/**
+ * --remote 仅为兼容旧用法而保留。
+ *
+ * 现在数据库连接完全由 POSTGRES_URL 决定：
+ * 指向生产库就是写生产，指向本地就是写本地。
+ * 保留该参数只是为了让旧命令不至于报「未知参数」，并在输出中提示。
+ */
+const REMOTE_LEGACY = flag('--remote');
 const PUBLISH = flag('--publish');
 const DRY_RUN = flag('--dry-run');
 const OUT = opt('--out');
@@ -56,14 +63,17 @@ const OUT = opt('--out');
 if (!DIR && !FILE) {
   console.error(`
 用法：
-  node scripts/import-markdown.mjs --dir<目录> [--remote] [--publish] [--dry-run]
-  node scripts/import-markdown.mjs --file <文件> [--remote] [--publish]
+  node scripts/import-markdown.mjs --dir <目录> [--publish] [--dry-run]
+  node scripts/import-markdown.mjs --file <文件> [--publish]
 
 选项：
-  --remote    写入生产数据库（不加则只写本地库，更安全）
   --publish   直接发布；不加则一律存为草稿
   --dry-run   只打印将要执行的 SQL，不写库
   --out <文件> 只生成 SQL 文件不执行（受限环境下用这个）
+
+数据库连接：
+  从环境变量 POSTGRES_URL（或 .env.local）读取。
+  指向哪个库就写入哪个库 —— 导入生产库前请确认连接串无误。
 `);
   process.exit(1);
 }
@@ -175,13 +185,12 @@ const stmts = [
   // posts.author_id 有外键约束，库中完全没有用户时整批插入会失败。
   // 先确保存在一个可用作者；密码哈希是占位值（不可登录），
   // 正常部署时库里已有真实管理员，这条不会生效。
-  `INSERT OR IGNORE INTO users (id,username,email,password_hash,password_algo,role,status,display_name,created_at,updated_at)
-   SELECT 1,'admin','admin@example.com','!invalid!','pbkdf2-sha256','admin','active','博主',datetime('now'),datetime('now')
+  `INSERT INTO users (username,email,password_hash,password_algo,role,status,display_name,created_at,updated_at)
+   SELECT 'admin','admin@example.com','!invalid!','pbkdf2-sha256','admin','active','博主',NOW(),NOW()
    WHERE NOT EXISTS (SELECT 1 FROM users);`
 ];
 
 // 取可用作者的标量子查询：优先管理员，其次任意用户。
-// 用内联子查询而非 TEMP VIEW —— D1 execute 对多语句里的临时视图支持不稳定。
 const AUTHOR_ID = `(SELECT COALESCE(
   (SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1),
   (SELECT id FROM users ORDER BY id LIMIT 1)
@@ -232,34 +241,40 @@ for (const file of files) {
     `word_count,reading_time,robots_index,revision,published_at,created_at,updated_at) VALUES ` +
     `(${AUTHOR_ID},'post',${sqlText(title)},(${seq}),${sqlText(summary)},${sqlText(body)},'markdown',` +
     `${sqlText(status)},${featured},${sqlNum(words)},${sqlNum(readingTime, 1)},1,1,` +
-    `${date ? `datetime(${sqlText(date)})` : (status === 'published' ? `datetime('now')` : 'NULL')},` +
-    `datetime('now'),datetime('now'));`
+    `${date ? `${sqlText(date)}::timestamp` : (status === 'published' ? 'NOW()' : 'NULL')},` +
+    `NOW(),NOW());`
   );
 
   // 后续的修订、标签、分类关联必须用「实际插入的 slug」，
-  // 否则冲突改名后会关联到旧文章上。用 last_insert_rowid 的等价写法：
-  // 取刚插入的那篇（title 与 slug 都匹配，且 id 最大）。
+  // 否则冲突改名后会关联到旧文章上。
+  // 取刚插入的那篇（title 匹配且 id 最大）。
   const refBy = `(SELECT id FROM posts WHERE title = ${sqlText(title)} ORDER BY id DESC LIMIT 1)`;
 
   // 首版修订快照（后台「历史版本」依赖此表）
   stmts.push(
     `INSERT INTO post_revisions (post_id,title,excerpt,content,revision,created_at,created_by) ` +
-    `SELECT id,${sqlText(title)},${sqlText(summary)},${sqlText(body)},1,datetime('now'),1 FROM posts WHERE id = ${refBy};`
+    `SELECT id,${sqlText(title)},${sqlText(summary)},${sqlText(body)},1,NOW(),` +
+    `(SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1) FROM posts WHERE id = ${refBy};`
   );
 
   for (const t of tags) {
     const ts = slugify(t) || `tag-${Date.now().toString(36)}`;
-    stmts.push(`INSERT OR IGNORE INTO tags (name,slug,created_at) VALUES (${sqlText(t)},${sqlText(ts)},datetime('now'));`);
     stmts.push(
-      `INSERT INTO post_tags (post_id,tag_id) SELECT ${refBy},t.id FROM tags t WHERE t.slug=${sqlText(ts)};`
+      `INSERT INTO tags (name,slug,created_at) VALUES (${sqlText(t)},${sqlText(ts)},NOW()) ON CONFLICT (slug) DO NOTHING;`
+    );
+    stmts.push(
+      `INSERT INTO post_tags (post_id,tag_id) SELECT ${refBy},t.id FROM tags t WHERE t.slug=${sqlText(ts)} ON CONFLICT DO NOTHING;`
     );
   }
 
   for (const c of cats) {
     const cs = slugify(c) || `cat-${Date.now().toString(36)}`;
-    stmts.push(`INSERT OR IGNORE INTO categories (name,slug,description,sort_order,created_at,updated_at) VALUES (${sqlText(c)},${sqlText(cs)},NULL,0,datetime('now'),datetime('now'));`);
     stmts.push(
-      `INSERT INTO post_categories (post_id,category_id) SELECT ${refBy},c.id FROM categories c WHERE c.slug=${sqlText(cs)};`
+      `INSERT INTO categories (name,slug,description,sort_order,created_at,updated_at) ` +
+      `VALUES (${sqlText(c)},${sqlText(cs)},NULL,0,NOW(),NOW()) ON CONFLICT (slug) DO NOTHING;`
+    );
+    stmts.push(
+      `INSERT INTO post_categories (post_id,category_id) SELECT ${refBy},c.id FROM categories c WHERE c.slug=${sqlText(cs)} ON CONFLICT DO NOTHING;`
     );
   }
 
@@ -271,7 +286,7 @@ stmts.unshift(`-- 同名 slug 已存在时改为追加序号，避免覆盖线�
 
 // ============ 输出报告 ============
 
-console.log(`\n准备导入 ${report.length} 篇${REMOTE ? '（生产库）' : '（本地库）'}${PUBLISH ? '，状态：已发布' : '，状态：草稿'}\n`);
+console.log(`\n准备导入 ${report.length} 篇${PUBLISH ? '，状态：已发布' : '，状态：草稿'}\n`);
 for (const r of report) {
   const meta = [r.status, `${r.words} 字`];
   if (r.tags) meta.push(`${r.tags} 标签`);
@@ -290,55 +305,61 @@ if (DRY_RUN) {
 
 // ============ 写出 SQL 文件 ============
 //
-// 不在脚本内直接调用 wrangler：部分环境（CI 沙箱、受限容器）禁止 spawn 子进程，
-// 会报 EBUSY / EINVAL。改为生成 .sql 文件，由调用方用任一方式执行：
-//   node scripts/import-markdown.mjs --dir ./posts --out ./.tmp/import.sql
-//   npx wrangler d1 execute myblog --remote --file ./.tmp/import.sql
-//
-// 这样脚本是纯计算、无副作用，任何环境都能跑；执行环节也可由用户自由选择。
+// 提供 --out 让脚本保持「纯计算、无副作用」，任何环境都能跑；
+// 执行环节交给调用方选择（psql 或自行处理）。
 
 if (OUT) {
   writeFileSync(OUT, sql, 'utf-8');
   console.log(`\n✓ SQL 已写入：${OUT}`);
-  console.log(`  执行：npx wrangler d1 execute myblog${REMOTE ? ' --remote' : ''} --file ${OUT}`);
+  console.log(`  执行：psql "$POSTGRES_URL" -f ${OUT}`);
   process.exit(0);
 }
 
 // ============ 执行 ============
+//
+// 直接用 pg 客户端连接 Postgres 执行整个 SQL 脚本（包在一个事务里）。
+// 不用 spawn 子进程，避免受限环境报 EINVAL/EBUSY。
 
-const sqlFile = join(tmpdir(), `import-md-${Date.now()}.sql`);
-writeFileSync(sqlFile, sql, 'utf-8');
+async function loadConnectionString() {
+  if (process.env.POSTGRES_URL) return process.env.POSTGRES_URL;
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  try {
+    const raw = readFileSync(resolve(process.cwd(), '.env.local'), 'utf-8');
+    for (const line of raw.split(/\r?\n/)) {
+      const m = /^\s*(POSTGRES_URL|DATABASE_URL)\s*=\s*(.+)\s*$/.exec(line);
+      if (m) return m[2].replace(/^["']|["']$/g, '');
+    }
+  } catch { /* 忽略 */ }
+  return null;
+}
 
-const args = ['d1', 'execute', 'myblog', '--file', sqlFile];
-if (REMOTE) args.push('--remote');
+const conn = await loadConnectionString();
+if (!conn) {
+  console.error('\n✗ 未找到数据库连接串');
+  console.error('  请设置 POSTGRES_URL，或在 .env.local 中配置；');
+  console.error('  也可以用 --out 生成 SQL 后手动执行。');
+  process.exit(1);
+}
 
-// 直接调用 wrangler 的 JS 主入口，绕过 .cmd 包装：
-//   1. spawn .cmd 报 EINVAL（Node 不允许直接执行 .cmd）；
-//   2. shell: true 转发 cmd.exe 在并发/文件锁场景报 EBUSY。
-const WRANGLER_CLI = join('node_modules', 'wrangler', 'wrangler-dist', 'cli.js');
+const pool = new Pool({ connectionString: conn, ssl: { rejectUnauthorized: false } });
+const client = await pool.connect();
 
 try {
-  const out = execFileSync(process.execPath, [WRANGLER_CLI, ...args], {
-    encoding: 'buffer',
-    timeout: 300000,
-    cwd: process.cwd(),
-  });
-  const text = out.toString('utf-8');
-  const m = /Executed (\d+) queries?[^\n]*?(\d+) rows written/.exec(text);
-  console.log(`\n✓ 导入完成${m ? `：${m[1]} 条语句，写入 ${m[2]} 行` : ''}`);
-  if (!REMOTE) console.log('  （本地库。加 --remote 可写入生产库）');
+  await client.query('BEGIN');
+  await client.query(sql);
+  await client.query('COMMIT');
+
+  const { rows } = await client.query(
+    `SELECT COUNT(*)::int AS n FROM posts WHERE created_at > NOW() - INTERVAL '1 minute'`
+  );
+  console.log(`\n✓ 导入完成（最近写入约 ${rows[0]?.n ?? 0} 篇文章）`);
+  console.log(`  目标库由 POSTGRES_URL 决定${REMOTE_LEGACY ? '（检测到 --remote 参数，已按连接串实际指向的库为准）' : ''}`);
 } catch (e) {
-  const buf = e.stdout ?? e.stderr ?? Buffer.alloc(0);
-  let text = '';
-  for (const enc of ['utf-8', 'gbk', 'latin1']) {
-    try {
-      text = buf.toString(enc);
-      if (!text.includes('�')) break;
-    } catch { /* 换下一个编码 */ }
-  }
-  console.error('\n✗ 导入失败：\n' + (text || String(e.message).slice(0, 400)).slice(0, 1200));
+  await client.query('ROLLBACK').catch(() => {});
+  console.error('\n✗ 导入失败：' + String(e.message).slice(0, 800));
   console.error('\n提示：先用 --dry-run 查看将要执行的 SQL');
   process.exitCode = 1;
 } finally {
-  try { unlinkSync(sqlFile); } catch { /* 清理失败不影响结果 */ }
+  client.release();
+  await pool.end();
 }

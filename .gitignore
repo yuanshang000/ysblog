@@ -19,6 +19,9 @@ apps/worker/public/assets/
 .env.*
 !.env.example
 
+# Vercel
+.vercel
+
 # 日志与编辑器
 *.log
 npm-debug.log*

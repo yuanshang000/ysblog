@@ -226,9 +226,10 @@ export async function handleMediaUpload(ctx: Ctx): Promise<Response> {
   const base = fileMeta(file.name).base.replace(/[^\w.\-一-龥]/g, '_').slice(0, 60) || 'file';
   const objectKey = `${yyyy}/${mm}/${Date.now().toString(36)}-${base}.${storedExt}`;
 
+  // Vercel Blob 不支持自定义元数据，上传者与原始文件名改记入数据库
+// （media 表已有 original_name 字段，uploaded_by 见操作日志）。
   await ctx.env.BUCKET.put(objectKey, buf, {
-    httpMetadata: { contentType: mime },
-    customMetadata: { uploadedBy: String(user.id), originalName: file.name }
+    httpMetadata: { contentType: mime }
   });
 
   const dims = mime.startsWith('image/') ? readDimensions(buf, mime) : { width: null, height: null };

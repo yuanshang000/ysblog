@@ -1,15 +1,24 @@
 /**
  * 环境变量与绑定类型。
  *
- * 密钥约定（必须通过 wrangler secret put 设置，绝不写入代码或仓库）：
+ * 密钥约定（必须通过平台的环境变量配置，绝不写入代码或仓库）：
  *   SESSION_SECRET  会话/令牌哈希盐
  *   IP_HASH_SALT    IP 哈希盐（统计与限流使用，不存原始 IP）
  *   ADMIN_SETUP_TOKEN 初始管理员创建令牌（仅首次部署需要，可随后删除）
+ *   POSTGRES_URL    数据库连接串（Vercel Postgres）
+ *   BLOB_READ_WRITE_TOKEN 媒体存储令牌（Vercel Blob）
  */
+import type { DbLike } from './db-adapter';
+
 export interface Env {
-  DB: D1Database;
-  BUCKET: R2Bucket;
-  ASSETS: Fetcher;
+  /**
+   * 数据库句柄。
+   *
+   * 保持 D1 的 prepare().bind().first() 调用形状，但底层已是 Postgres，
+   * 由 db-adapter 完成语法与返回值转换 —— 这样业务代码无需感知数据库差异。
+   */
+  DB: DbLike;
+  BUCKET: BlobStore;
 
   /** 站点公开 URL，例如 https://blog.example.com */
   SITE_URL?: string;
@@ -24,6 +33,26 @@ export interface Env {
   ALLOW_SVG?: string;
 
   ENVIRONMENT?: string;
+}
+
+/**
+ * 对象存储接口（Vercel Blob）。
+ *
+ * 与 Cloudflare R2 的 API 不同，此处只暴露本项目实际需要的能力，
+ * 由 services/media 层的具体实现提供。
+ */
+export interface BlobStore {
+  put(key: string, body: ArrayBuffer | Uint8Array, opts?: { contentType?: string; httpMetadata?: { contentType?: string } }): Promise<void>;
+  get(key: string): Promise<{
+    body: ReadableStream<Uint8Array>;
+    httpMetadata?: { contentType?: string };
+    size: number;
+    uploadedAt?: Date;
+  } | null>;
+  delete(key: string): Promise<void>;
+  exists(key: string): Promise<boolean>;
+  /** 返回可直接访问的公开 URL */
+  url(key: string): string;
 }
 
 export interface SessionUser {

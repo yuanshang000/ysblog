@@ -4,6 +4,7 @@
  */
 import { mediaUrl } from '../lib/context';
 import type { Env } from '../lib/env';
+import type { DbLike } from '../lib/db-adapter';
 import type {
   Category,
   Comment,
@@ -196,7 +197,13 @@ export function mapSummary(r: PostRow & { category_name?: string | null; categor
 
 // ============ 通用 ============
 
-export async function withBatch<T>(env: Env, fn: (db: D1Database) => Promise<T>): Promise<T> {
+/**
+ * 事务包装。
+ *
+ * 原实现依赖 D1 的 batch（原子批量执行），现由适配层以事务实现，
+ * 因此这里只需把 db 句柄交给调用方。
+ */
+export async function withBatch<T>(env: Env, fn: (db: DbLike) => Promise<T>): Promise<T> {
   return fn(env.DB);
 }
 
