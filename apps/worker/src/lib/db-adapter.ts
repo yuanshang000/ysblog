@@ -69,6 +69,13 @@ export interface DbLike {
 export function rewriteSql(sql: string): string {
   let s = sql;
 
+  // IFNULL(a, b) → COALESCE(a, b)
+  //
+  // IFNULL 是 SQLite 的函数名，Postgres 中不存在，会报
+  // `function ifnull(numeric, integer) does not exist`（媒体库统计接口曾因此 500）。
+  // COALESCE 是 SQL 标准写法，SQLite 同样支持，因此单向替换即可。
+  s = s.replace(/\bIFNULL\s*\(/gi, 'COALESCE(');
+
   // datetime('now') → NOW()
   s = s.replace(/datetime\(\s*'now'\s*(,\s*'([^']*)'\s*)?\)/gi, (_m, _g1, modifier) => {
     if (!modifier) return 'NOW()';

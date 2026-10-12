@@ -2,6 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { rewriteSql, normalizeRow } from '../apps/worker/src/lib/db-adapter';
 
 describe('SQLite → Postgres 方言转换', () => {
+  it('IFNULL → COALESCE（Postgres 无 ifnull 函数）', () => {
+    // 回归：媒体库统计接口曾报 function ifnull(numeric, integer) does not exist
+    expect(rewriteSql('SELECT COUNT(*) AS c, IFNULL(SUM(file_size),0) AS bytes FROM media')).toBe(
+      'SELECT COUNT(*) AS c, COALESCE(SUM(file_size),0) AS bytes FROM media'
+    );
+    expect(rewriteSql("SELECT LOWER(IFNULL(p.excerpt,'')) FROM posts p")).toBe(
+      "SELECT LOWER(COALESCE(p.excerpt,'')) FROM posts p"
+    );
+  });
+
   it('占位符 ? 转为 $n 并按顺序编号', () => {
     expect(rewriteSql('SELECT * FROM t WHERE a = ? AND b = ?')).toBe(
       'SELECT * FROM t WHERE a = $1 AND b = $2'
