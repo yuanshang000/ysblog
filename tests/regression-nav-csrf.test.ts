@@ -121,3 +121,34 @@ describe('前台导航链接渲染', () => {
     expect(html).toContain('aria-current="page"');
   });
 });
+
+/**
+ * 回归：后台登录失败时给出可定位的原因。
+ *
+ * 现场问题：密码 `dfy/fgh134528` 含斜杠，用户把整串填进了「用户名」框，
+ * 服务端只回「用户名或密码错误」，用户反复重试仍找不到原因。
+ * 现改为在密码校验之前先校验用户名格式，直接点明是填错框。
+ */
+describe('后台登录的用户名格式校验', () => {
+  // 与 apps/worker/src/routes/admin-auth.ts 的 USERNAME_RE 保持一致
+  const USERNAME_RE = /^[A-Za-z0-9_.-]{3,32}$/;
+
+  it('正常用户名通过校验', () => {
+    expect(USERNAME_RE.test('admin')).toBe(true);
+    expect(USERNAME_RE.test('root_1')).toBe(true);
+    expect(USERNAME_RE.test('a.b-c')).toBe(true);
+  });
+
+  it('含斜杠等分隔符的输入被判为填错框', () => {
+    // 用户把密码整串填进用户名框的典型输入
+    expect(USERNAME_RE.test('dfy/fgh134528')).toBe(false);
+    expect(USERNAME_RE.test('admin@123')).toBe(false);
+    expect(USERNAME_RE.test('a b')).toBe(false);
+  });
+
+  it('长度越界一律拒绝', () => {
+    expect(USERNAME_RE.test('ab')).toBe(false);
+    expect(USERNAME_RE.test('a'.repeat(33))).toBe(false);
+    expect(USERNAME_RE.test('a'.repeat(32))).toBe(true);
+  });
+});

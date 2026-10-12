@@ -27,6 +27,12 @@ function mapUser(r: Record<string, unknown>): User {
   };
 }
 
+/**
+ * 用户名格式，与 setup / setup-admin 脚本的校验规则保持一致。
+ * 用户名只允许字母、数字、下划线、点、连字符。
+ */
+const USERNAME_RE = /^[A-Za-z0-9_.-]{3,32}$/;
+
 export async function handleLogin(ctx: Ctx): Promise<Response> {
   const body = await readJson<{ username?: string; password?: string }>(ctx);
   const username = (body.username ?? '').trim();
@@ -34,6 +40,19 @@ export async function handleLogin(ctx: Ctx): Promise<Response> {
 
   if (!username || !password) {
     throw new HttpError(422, '请输入用户名和密码');
+  }
+
+  /**
+   * 先校验用户名格式，再走 PBKDF2。
+   *
+   * 现实中常见误操作：把整串凭据填进了「用户名」框（含 / @ . 等分隔符的密码）。
+   * 这类输入必然匹配不到任何账号，若直接返回「用户名或密码错误」，
+   * 用户会反复重试却找不到原因。这里提前给出可执行的提示。
+   */
+  if (!USERNAME_RE.test(username)) {
+    throw new HttpError(422, '用户名格式不正确：仅可包含字母、数字、下划线、点或连字符。请确认密码没有填入用户名框', {
+      field: 'username'
+    });
   }
 
   // 无论账号是否存在都走同一分支，避免账号枚举
