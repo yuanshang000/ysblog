@@ -53,7 +53,12 @@ export default defineConfig({
         // 入口文件重命名为 app.htm（见文件头注释）
         entryFileNames: 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name][extname]'
+        // 资产文件名必须带内容哈希。
+        // 历史问题：曾写成 'assets/[name][extname]'，CSS 会固定输出为 index.css，
+        // 而 vercel.json 对 /admin/assets/ 下发了 immutable 一年缓存。
+        // 浏览器因此长期缓存旧 index.css；CSS 内容一旦变化，
+        // 新 JS 里的 scoped 哈希就与旧 CSS 对不上，页面样式整体失效。
+        assetFileNames: 'assets/[name]-[hash][extname]'
       }
     }
   },
