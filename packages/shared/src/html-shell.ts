@@ -42,7 +42,7 @@ document.documentElement.style.colorScheme=t;
 
 function accentVar(hex: string): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return '#4f46e5';
+  if (!m) return '#b5813a';
   const n = parseInt(m[1], 16);
   return `#${n.toString(16).padStart(6, '0')}`;
 }
@@ -120,32 +120,34 @@ html{-webkit-text-size-adjust:100%;scroll-behavior:smooth;scroll-padding-top:84p
 body{margin:0}
 
 :root{
-  --accent:#4f46e5;
+  --accent:#b5813a;
   --accent-soft:color-mix(in srgb,var(--accent) 10%,transparent);
   --accent-border:color-mix(in srgb,var(--accent) 28%,transparent);
 
-  --bg:#ffffff;
-  --bg-subtle:#fafafa;
-  --bg-muted:#f5f5f4;
-  --bg-inset:#fafaf9;
-  --surface:#ffffff;
-  --surface-hover:#fafafa;
+  /* 日间主题：淡棕黄（奶油色系），与管理后台保持一致 */
+  --bg:#f6f1e8;
+  --bg-subtle:#efe8db;
+  --bg-muted:#e9e1d1;
+  --bg-inset:#f2ece0;
+  --surface:#fffdf8;
+  --surface-hover:#f4eee2;
 
-  --text:#1c1c1e;
-  --text-secondary:#57565e;
-  --text-tertiary:#8a8a93;
-  --text-inverse:#fafafa;
+  --text:#3b332a;
+  --text-secondary:#6d6355;
+  --text-tertiary:#9c9182;
+  --text-inverse:#fffdf8;
 
-  --border:#e8e8ea;
-  --border-strong:#d8d8dc;
+  --border:#e6dccb;
+  --border-strong:#d3c6ae;
 
-  --code-bg:#f7f7f8;
-  --code-text:#24292f;
+  --code-bg:#f2ece0;
+  --code-text:#4a4034;
 
-  --shadow-xs:0 1px 2px rgba(0,0,0,.04);
-  --shadow-sm:0 2px 8px rgba(0,0,0,.05);
-  --shadow-md:0 8px 24px rgba(0,0,0,.07);
-  --shadow-lg:0 16px 48px rgba(0,0,0,.1);
+  --shadow-xs:0 1px 2px rgba(59,51,42,.05);
+  --shadow-sm:0 2px 8px rgba(59,51,42,.07);
+  --shadow-md:0 8px 24px rgba(59,51,42,.09);
+  --shadow-lg:0 16px 48px rgba(59,51,42,.12);
+  --tok-str:#3f7d3f;--tok-num:#a35a12;--tok-kw:#7b4fbf;--tok-com:#8a8073;
 
   --radius-sm:6px;
   --radius:10px;
@@ -168,33 +170,37 @@ body{margin:0}
   --transition:160ms cubic-bezier(.4,0,.2,1);
 }
 
+/* 夜间主题：淡灰（浅底深字）。
+ * 注意：这是「淡灰」而非传统深色，因此正文用深色文字、阴影用浅色投影，
+ * 不能沿用深色模式那套反白处理，否则会出现浅底配浅字的不可读问题。 */
 html[data-theme="dark"]{
-  --accent-soft:color-mix(in srgb,var(--accent) 18%,transparent);
-  --accent-border:color-mix(in srgb,var(--accent) 42%,transparent);
+  --accent-soft:color-mix(in srgb,var(--accent) 14%,transparent);
+  --accent-border:color-mix(in srgb,var(--accent) 34%,transparent);
 
-  --bg:#0e0e11;
-  --bg-subtle:#131316;
-  --bg-muted:#1a1a1f;
-  --bg-inset:#16161a;
-  --surface:#16161a;
-  --surface-hover:#1e1e24;
+  --bg:#f0f0f1;
+  --bg-subtle:#e7e7e9;
+  --bg-muted:#dedeE1;
+  --bg-inset:#e9e9eb;
+  --surface:#f8f8f9;
+  --surface-hover:#e4e4e7;
 
-  --text:#ececef;
-  --text-secondary:#a9a9b3;
-  --text-tertiary:#74747f;
-  --text-inverse:#111114;
+  --text:#33333a;
+  --text-secondary:#5f5f68;
+  --text-tertiary:#8b8b95;
+  --text-inverse:#f8f8f9;
 
-  --border:#26262c;
-  --border-strong:#33333c;
+  --border:#dcdce1;
+  --border-strong:#c4c4cb;
 
-  --code-bg:#1b1b20;
-  --code-text:#d6d6de;
+  --code-bg:#e6e6ea;
+  --code-text:#3a3a42;
 
-  --shadow-xs:0 1px 2px rgba(0,0,0,.4);
-  --shadow-sm:0 2px 8px rgba(0,0,0,.45);
-  --shadow-md:0 8px 24px rgba(0,0,0,.5);
-  --shadow-lg:0 16px 48px rgba(0,0,0,.6);
-  --tok-str:#a5d6a7;--tok-num:#f5c26b;--tok-kw:#c4a7f7;--tok-com:#7d8590;
+  /* 浅底上的阴影要比日间更淡，否则会显脏 */
+  --shadow-xs:0 1px 2px rgba(51,51,58,.06);
+  --shadow-sm:0 2px 8px rgba(51,51,58,.08);
+  --shadow-md:0 8px 24px rgba(51,51,58,.1);
+  --shadow-lg:0 16px 48px rgba(51,51,58,.14);
+  --tok-str:#2f7a3e;--tok-num:#9c5410;--tok-kw:#7348b8;--tok-com:#78787f;
 }
 
 body{
@@ -530,10 +536,7 @@ h5.md-heading,h6.md-heading{font-size:.95em;margin:1.4em 0 .5em;color:var(--text
 .md-code-copy:hover{color:var(--accent);border-color:var(--accent-border)}
 .md-code-copy[data-copied="true"]{color:var(--accent);opacity:1}
 .tok-str{color:var(--tok-str)}.tok-num{color:var(--tok-num)}.tok-kw{color:var(--tok-kw);font-weight:500}.tok-com{color:var(--tok-com);font-style:italic}
-html[data-theme="light"] .tok-str{color:#0a7d3f}
-html[data-theme="light"] .tok-num{color:#b45309}
-html[data-theme="light"] .tok-kw{color:#8250df}
-html[data-theme="light"] .tok-com{color:#6e7781}
+/* 语法高亮配色统一由 --tok-* 令牌按主题给出，不再为 light 单独硬编码 */
 
 .md-math{
   font-family:var(--font-mono);background:var(--bg-muted);padding:.1em .35em;
