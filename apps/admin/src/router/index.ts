@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
-import { authApi } from '@/api';
+import { authApi, readCookie } from '@/api';
 
 const routes: RouteRecordRaw[] = [
   { path: '/login', name: 'login', component: () => import('@/views/Login.vue'), meta: { public: true } },
@@ -31,30 +31,53 @@ export const router = createRouter({
   scrollBehavior: () => ({ top: 0 })
 });
 
-let authChecked = false;
+/**
+ * 是否可能已登录。
+ *
+ * mb_session 是 HttpOnly，JS 读不到，因此这里用前端可读的 mb_csrf 作为启发式判断：
+ * 服务端在创建会话时一定会同时下发 mb_csrf，两者生命周期一致。
+ * 没有它就说明从未登录过，不必再请求 /admin/me。
+ *
+ * 目的：避免未登录用户一打开页面就看到控制台的 401 报错。
+ */
+function mayBeLoggedIn(): boolean {
+  return !!readCookie('mb_csrf');
+}
 
 router.beforeEach(async (to) => {
   if (to.meta.public) {
-    // 已登录时访问登录/初始化页，直接回工作台
-    if (to.name === 'login' || to.name === 'setup') {
+    // 已登录时访问登录/初始化页，直接回工作台。
+    // 未登录时不要发请求，否则控制台会留下一条 401。
+    if ((to.name === 'login' || to.name === 'setup') && mayBeLoggedIn()) {
       try {
         await authApi.me();
         return { name: 'dashboard' };
       } catch {
-        /* 未登录，继续 */
+        /* 会话已失效，清掉残留 Cookie 后继续显示登录页 */
+        clearSessionCookies();
       }
     }
     return true;
   }
 
-  if (!authChecked) {
-    authChecked = true;
+  // 受保护页面：没有会话 Cookie 直接跳登录，不发无意义的请求
+  if (!mayBeLoggedIn()) {
+    return { name: 'login', query: { redirect: to.fullPath } };
   }
 
   try {
     await authApi.me();
     return true;
   } catch {
+    clearSessionCookies();
     return { name: 'login', query: { redirect: to.fullPath } };
   }
 });
+
+/** 清除前端可读的两个 Cookie，避免失效状态反复触发 /admin/me */
+function clearSessionCookies(): void {
+  if (typeof document === 'undefined') return;
+  for (const name of ['mb_csrf']) {
+    document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
+  }
+}

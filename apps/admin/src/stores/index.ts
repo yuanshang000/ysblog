@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import type { Category, SiteSettings, Tag, User } from '@myblog/shared';
-import { authApi, settingsApi } from '@/api';
+import { authApi, readCookie, settingsApi } from '@/api';
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null);
@@ -9,6 +9,13 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function fetchUser(): Promise<User | null> {
     if (loaded.value && user.value) return user.value;
+    // 没有会话 Cookie 说明尚未登录，直接返回，避免产生 401 报错。
+    // mb_session 是 HttpOnly 读不到，用生命周期一致的 mb_csrf 判断。
+    if (!readCookie('mb_csrf')) {
+      user.value = null;
+      loaded.value = true;
+      return null;
+    }
     try {
       user.value = await authApi.me();
     } catch {

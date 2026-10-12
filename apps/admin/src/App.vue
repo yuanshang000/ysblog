@@ -39,6 +39,10 @@ const pageTitle = computed(() => (route.meta.title as string) ?? '管理后台')
 const isEditor = computed(() => route.name === 'post-edit' || route.name === 'post-new');
 
 onMounted(async () => {
+  //登录页不需要拉取用户信息；且未登录时请求会留下 401 报错。
+  //路由守卫确认放行到受保护页面时，必然已经持有会话 Cookie。
+  if (route.meta.public) return;
+
   await auth.fetchUser();
   try {
     const s = await authApi.me();
