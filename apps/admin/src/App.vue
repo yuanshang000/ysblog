@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores';
-import { authApi } from '@/api';
+import { authApi, readCookie } from '@/api';
 
 const route = useRoute();
 const router = useRouter();
@@ -38,19 +38,34 @@ const menus = [
 const pageTitle = computed(() => (route.meta.title as string) ?? '管理后台');
 const isEditor = computed(() => route.name === 'post-edit' || route.name === 'post-new');
 
-onMounted(async () => {
-  //登录页不需要拉取用户信息；且未登录时请求会留下 401 报错。
-  //路由守卫确认放行到受保护页面时，必然已经持有会话 Cookie。
-  if (route.meta.public) return;
-
-  await auth.fetchUser();
-  try {
-    const s = await authApi.me();
-    siteName.value = s.displayName || s.username;
-  } catch {
-    /* 路由守卫已处理 */
-  }
-});
+/**
+ * 拉取当前登录用户，展示在侧边栏。
+ *
+ * 用 watch 而非 onMounted：App 组件在路由守卫完成跳转「之前」就已挂载，
+ * 此刻 route 仍是 /admin 这类受保护路径。若在 onMounted 里直接请求 /admin/me，
+ * 未登录用户一打开页面就会在控制台看到 401 报错，容易误判为系统故障。
+ * 监听 meta.public 可确保只在该路径下已经登录时才请求。
+ */
+watch(
+  () => route.meta.public,
+  (isPublic) => {
+    siteName.value = '';
+    // 公共页（登录/初始化）不需要用户信息。
+    // 受保护页面也必须确认已持有会话 Cookie 才请求，
+    // 因为 immediate 首次执行时路由守卫可能尚未完成跳转。
+    if (isPublic || !readCookie('mb_csrf')) return;
+    void (async () => {
+      await auth.fetchUser();
+      try {
+        const s = await authApi.me();
+        siteName.value = s.displayName || s.username;
+      } catch {
+        /* 登录态失效由路由守卫处理 */
+      }
+    })();
+  },
+  { immediate: true }
+);
 
 async function handleLogout(): Promise<void> {
   await auth.logout();
