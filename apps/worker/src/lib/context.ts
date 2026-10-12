@@ -33,7 +33,16 @@ export async function createCtx(
     request.headers.get('CF-Connecting-IP') ??
     request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ??
     '0.0.0.0';
-  const salt = env.IP_HASH_SALT || env.SESSION_SECRET || 'default-salt';
+  // IP 哈希盐必须来自环境变量。绝不能回退到固定默认值：
+  // 固定盐是公开的，攻击者可用彩虹表反推出访客真实 IP，
+  // 且所有站点的哈希都可跨站比对，等同于没有做匿名化。
+  const salt = env.IP_HASH_SALT || env.SESSION_SECRET;
+  if (!salt) {
+    throw new Error(
+      '缺少 IP_HASH_SALT（或 SESSION_SECRET）环境变量：' +
+        '为保证访客 IP 不可反推，配置缺失时直接拒绝服务而不使用默认值。'
+    );
+  }
   const ipHash = (await sha256Hex(`${salt}:${ip}`)).slice(0, 32);
   return {
     env,

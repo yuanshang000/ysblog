@@ -15,9 +15,20 @@ apps/worker/public/assets/
 .dev.vars
 
 # 环境变量与密钥
+# 规则说明：先忽略一切 env 家族文件（含 *.env.* 这类带前缀的变体），
+# 再用 ! 放行唯一的示例文件。.env.local 内含真实数据库口令与 Vercel 令牌。
 .env
 .env.*
+*.env
+*.env.*
 !.env.example
+# 其它常见的密钥载体，一并忽略
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+service-account*.json
 
 # Vercel
 .vercel
@@ -32,6 +43,7 @@ npm-debug.log*
 # 备份产物（可能含数据库导出与用户数据，不应入库）
 backups/
 
-# 截图（调试用）
+# 调试用临时截图（README 用的正式截图在 docs/images/，需要入库）
 .shots/
+.shots
 .env*.local
