@@ -18,15 +18,22 @@
  */
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, access } from 'node:fs/promises';
 import path from 'node:path';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const entry = path.join(root, '..', 'apps', 'worker', 'src', 'index.ts');
 const outDir = path.join(root, '..', 'dist-server');
 const outfile = path.join(outDir, '_worker.mjs');
+// 后台 SPA 外壳：Vercel Function 产物里没有 outputDirectory 指定的 public/，
+// 单独用 includeFiles 带app.htm 受「只能写一个路径」限制，
+// 因此在打包阶段就把它作为字符串内联进产物。
+const adminHtml = path.join(root, '..', 'apps', 'worker', 'public', 'admin', 'app.htm');
 
 await mkdir(outDir, { recursive: true });
+await access(adminHtml).catch(() => {
+  throw new Error('缺少 apps/worker/public/admin/app.htm，请先运行 npm run build:admin');
+});
 
 await build({
   entryPoints: [entry],
@@ -39,6 +46,12 @@ await build({
   packages: 'external',
   sourcemap: false,
   logLevel: 'info',
+  loader: {
+    // 后台外壳以字符串形式内联，运行时无需再读文件。
+    // 注意产物是 app.htm（.htm 而非 .html），两种后缀都要声明。
+    '.html': 'text',
+    '.htm': 'text'
+  },
   banner: {
     js: [
       "import { createRequire as __createRequire } from 'node:module';",

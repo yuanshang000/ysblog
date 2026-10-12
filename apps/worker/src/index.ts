@@ -23,6 +23,10 @@ import { findRedirect, getPostBySlug, logOperation, recordView } from './reposit
 import { getSettings, ensureDefaultSettings } from './services/settings';
 import { runScheduledJobs } from './jobs/scheduler';
 
+// 后台 SPA 外壳 HTML。构建时由 esbuild 的 text loader 内联为字符串，
+// 让 Function 产物无需依赖 outputDirectory 指定的 public/ 目录。
+import ADMIN_SHELL_HTML from '../public/admin/app.htm';
+
 import * as publicApi from './routes/public-api';
 import * as adminAuth from './routes/admin-auth';
 import * as adminPosts from './routes/admin-posts';
@@ -724,17 +728,34 @@ function buildEnv(): Env {
  * 读取后台 SPA 的入口 HTML。
  *
  * Vercel 上 public/ 目录由CDN 直接托管，但 SPA 的客户端路由
- * （如 /admin/posts/1）需要一个入口文件兜底。这里在运行时读取并缓存。
+ * （如 /admin/posts/1）需要一个入口文件兜底。
+ *
+ * 注意：Function 的产物目录里没有 outputDirectory 指定的 public/，
+ * 所以构建阶段（scripts/build-worker.mjs）用 esbuild 的 text loader
+ * 把 app.htm 内联为字符串常量，这里优先使用它。
+ * 仅在本地开发（vercel dev 直接跑源码、未经 esbuild）时回退到按路径读文件。
  */
 let adminShellCache: string | null = null;
+
 async function readAdminShell(): Promise<string | null> {
   if (adminShellCache) return adminShellCache;
-  for (const p of ['admin/index.html', 'admin/app.htm', './admin/index.html']) {
+
+  if (ADMIN_SHELL_HTML) {
+    adminShellCache = ADMIN_SHELL_HTML;
+    return adminShellCache;
+  }
+
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const candidates = [
+    'apps/worker/public/admin/app.htm',
+    'apps/worker/public/admin/index.html',
+    'public/admin/app.htm',
+    'public/admin/index.html'
+  ];
+  for (const p of candidates) {
     try {
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
-      const file = path.join(process.cwd(), 'public', p);
-      const html = await fs.readFile(file, 'utf-8');
+      const html = await fs.readFile(path.join(process.cwd(), p), 'utf-8');
       if (html) {
         adminShellCache = html;
         return html;
@@ -743,6 +764,7 @@ async function readAdminShell(): Promise<string | null> {
       // 尝试下一个候选路径
     }
   }
+  console.error('[admin] 未找到后台外壳 HTML，cwd=', process.cwd(), '尝试过:', candidates);
   return null;
 }
 

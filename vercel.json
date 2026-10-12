@@ -11,7 +11,7 @@
     }
   },
   "rewrites": [
-    { "source": "/((?!media/|admin/|assets/|islands/).*)", "destination": "/api/index" }
+    { "source": "/((?!assets/|islands/|admin/assets/).*)", "destination": "/api/index" }
   ],
   "crons": [
     {
