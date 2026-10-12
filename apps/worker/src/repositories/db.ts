@@ -232,6 +232,32 @@ const POST_SELECT = `
     LEFT JOIN users u ON u.id = p.author_id
     LEFT JOIN media m ON m.id = p.cover_media_id`;
 
+/** posts 表全部列，逐个包一层 min()，并补上两个关联列。 */
+const POST_AGG_COLUMNS = [
+  'id', 'author_id', 'type', 'title', 'slug', 'excerpt', 'content',
+  'content_format', 'cover_media_id', 'cover_alt', 'status', 'is_featured',
+  'sort_order', 'word_count', 'reading_time', 'seo_title', 'seo_description',
+  'canonical_url', 'robots_index', 'revision', 'published_at', 'scheduled_at',
+  'created_at', 'updated_at', 'deleted_at'
+]
+  .map((c) => `min(p.${c}) AS ${c}`)
+  .concat(['min(u.username) AS author_name', 'min(m.object_key) AS cover_key'])
+  .join(',\n       ');
+
+/**
+ * 带 GROUP BY 的等价查询。
+ *
+ * Postgres 不支持「GROUP BY 主键即隐含函数依赖其它列」的宽松推断（SQLite 支持），
+ * 且 `p.*` 在聚合查询中不可直接使用。这里把 posts 的每一列与两个关联列
+ * 都用 min() 聚合取同一分组的唯一值——分组键是主键，组内只有一行，
+ * 因此 min() 结果与直接 select 完全等价，且 SQLite / Postgres 通用。
+ */
+const POST_SELECT_AGG = `
+  SELECT ${POST_AGG_COLUMNS}
+    FROM posts p
+    LEFT JOIN users u ON u.id = p.author_id
+    LEFT JOIN media m ON m.id = p.cover_media_id`;
+
 function attachCover(row: PostRow & { cover_key?: string | null }, publicBase: string): PostRow {
   return {
     ...row,
@@ -434,8 +460,11 @@ export async function relatedPosts(
     return rows.results.map((r) => mapSummary(attachCover(r, publicBase)));
   }
   const placeholders = ids.map(() => '?').join(',');
+  // 这里的 u.username / m.object_key 来自 LEFT JOIN 的关联表，
+  // Postgres 不支持 SQLite 那种「按 p.id 分组即隐含函数依赖」的宽松推断，
+  // 直接 select 会报 42803。改用 min() 聚合取同一分组的唯一值，语义等价且两库通用。
   const rows = await env.DB.prepare(
-    `${POST_SELECT}
+    `${POST_SELECT_AGG}
       WHERE p.type='post' AND p.status='published' AND p.id != ?
         AND (p.id IN (SELECT post_id FROM post_categories WHERE category_id IN (${placeholders}))
           OR p.id IN (SELECT post_id FROM post_tags WHERE tag_id IN (${placeholders})))
